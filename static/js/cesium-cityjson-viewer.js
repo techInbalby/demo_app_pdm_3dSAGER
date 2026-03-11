@@ -19,6 +19,8 @@ class CesiumCityJSONViewer {
         this.buildingEntities = new Map(); // Store building entities for click handling
         this.idMapping = new Map(); // Pre-computed ID mapping for fast lookups: numericId -> [all variations]
         this.isInitialized = false;
+        this.isLoading = false;
+        this.pendingFilePath = null;
         this.boundingBox = null; // Store bounding box for camera fitting
         this.crs = null; // Store coordinate reference system from metadata
         this.sourceCRS = null; // Source CRS from CityJSON metadata
@@ -35,7 +37,23 @@ class CesiumCityJSONViewer {
         this.init();
     }
     
-    init() {
+    ensureProj4Defs() {
+        if (typeof proj4 === 'undefined' || !proj4.defs) {
+            return;
+        }
+        // RD New (EPSG:28992) used for The Hague data. EPSG:7415 is a compound CRS
+        // with the same horizontal component; treat it as 28992 for x/y transforms.
+        if (!proj4.defs['EPSG:28992']) {
+            proj4.defs('EPSG:28992',
+                '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 ' +
+                '+k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel ' +
+                '+towgs84=565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725 ' +
+                '+units=m +no_defs'
+            );
+        }
+    }
+
+    async init() {
         // Check if container exists
         if (!this.container) {
             console.error('Viewer container not found');
@@ -55,9 +73,26 @@ class CesiumCityJSONViewer {
         try {
             // Initialize Cesium Viewer with ellipsoid terrain (no token required)
             // Using OpenStreetMap imagery provider to avoid Ion token requirement
+            const ionToken = (typeof window !== 'undefined' && window.CESIUM_ION_TOKEN) ? window.CESIUM_ION_TOKEN : '';
+            if (ionToken) {
+                Cesium.Ion.defaultAccessToken = ionToken;
+            }
+
             const osmImagery = new Cesium.OpenStreetMapImageryProvider({
                 url: 'https://a.tile.openstreetmap.org/'
             });
+            this.ensureProj4Defs();
+            let imageryProvider = osmImagery;
+            let ionImageryProvider = null;
+            if (ionToken) {
+                try {
+                    ionImageryProvider = await Cesium.IonImageryProvider.fromAssetId(2);
+                    imageryProvider = ionImageryProvider;
+                } catch (error) {
+                    console.warn('Failed to load Cesium Ion imagery, falling back to OSM.', error);
+                    imageryProvider = osmImagery;
+                }
+            }
             
             // For comparison viewers, use minimal features for faster loading
             const viewerOptions = this.isComparisonViewer ? {
@@ -76,8 +111,8 @@ class CesiumCityJSONViewer {
                 selectionIndicator: false,
                 shouldAnimate: false
             } : {
-                terrainProvider: new Cesium.EllipsoidTerrainProvider(), // Simple ellipsoid - no token needed
-                imageryProvider: osmImagery, // Use OpenStreetMap instead of Ion imagery
+                terrainProvider: new Cesium.EllipsoidTerrainProvider(), // Simple ellipsoid terrain
+                imageryProvider,
                 baseLayerPicker: false, // Disable to avoid Ion token requirement
                 vrButton: false,
                 geocoder: false, // Geocoder may also use Ion, disable if not needed
@@ -92,10 +127,37 @@ class CesiumCityJSONViewer {
             };
             
             this.viewer = new Cesium.Viewer(this.container, viewerOptions);
+
+            if (!this.isComparisonViewer) {
+                // Ensure an imagery layer is present (some providers may fail silently)
+                this.viewer.imageryLayers.removeAll();
+                try {
+                    this.viewer.imageryLayers.addImageryProvider(imageryProvider);
+                } catch (error) {
+                    console.warn('Failed to apply imagery provider, falling back to OSM.', error);
+                    this.viewer.imageryLayers.addImageryProvider(osmImagery);
+                }
+
+                if (ionImageryProvider && ionImageryProvider.errorEvent) {
+                    let fallbackApplied = false;
+                    ionImageryProvider.errorEvent.addEventListener((error) => {
+                        if (fallbackApplied) {
+                            return;
+                        }
+                        fallbackApplied = true;
+                        console.warn('Cesium Ion imagery failed, falling back to OSM.', error);
+                        this.viewer.imageryLayers.removeAll();
+                        this.viewer.imageryLayers.addImageryProvider(osmImagery);
+                        if (this.viewer.scene && this.viewer.scene.requestRender) {
+                            this.viewer.scene.requestRender();
+                        }
+                    });
+                }
+            }
             
-            // Set background to white
-            this.viewer.scene.backgroundColor = Cesium.Color.WHITE;
-            this.viewer.scene.globe.baseColor = Cesium.Color.WHITE;
+            // Set background colors (keep neutral so imagery stands out)
+            this.viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#0f172a');
+            this.viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1e293b');
             this.viewer.scene.globe.enableLighting = false;
             
             // Set initial camera position (The Hague, Netherlands) - Top-down view
@@ -233,6 +295,15 @@ class CesiumCityJSONViewer {
         }
         
         console.log('Loading CityJSON file:', filePath);
+
+        if (this.isLoading) {
+            this.pendingFilePath = filePath;
+            this.updateLoadingProgress('Switching to latest selection...');
+            return;
+        }
+
+        this.isLoading = true;
+        this.pendingFilePath = null;
         
         // Clear existing buildings
         this.clearBuildings();
@@ -458,6 +529,7 @@ class CesiumCityJSONViewer {
             
         } catch (error) {
             console.error('Error parsing CityJSON:', error);
+            this.hideLoading();
             this.showError('Failed to parse CityJSON: ' + error.message);
         }
     }
@@ -522,10 +594,15 @@ class CesiumCityJSONViewer {
                 let sourceEPSG = this.sourceCRS;
                 
                 // Extract EPSG number
-                const epsgMatch = this.sourceCRS.match(/(\d+)/);
-                if (epsgMatch) {
-                    const epsgCode = epsgMatch[1];
-                    sourceEPSG = `EPSG:${epsgCode}`;
+                const epsgMatches = this.sourceCRS.match(/\d+/g);
+                if (epsgMatches && epsgMatches.length > 0) {
+                    const epsgCode = epsgMatches[epsgMatches.length - 1];
+                    // EPSG:7415 is a compound CRS; use EPSG:28992 for horizontal transform.
+                    if (epsgCode === '7415') {
+                        sourceEPSG = 'EPSG:28992';
+                    } else {
+                        sourceEPSG = `EPSG:${epsgCode}`;
+                    }
                 } else if (!this.sourceCRS.includes('EPSG:')) {
                     sourceEPSG = `EPSG:${this.sourceCRS}`;
                 }
@@ -1135,6 +1212,10 @@ class CesiumCityJSONViewer {
         console.log('Loading CityJSON...');
         // Show visual loading indicator
         if (this.container) {
+            const existing = document.getElementById('cesium-loading-indicator');
+            if (existing) {
+                existing.remove();
+            }
             const loadingDiv = document.createElement('div');
             loadingDiv.id = 'cesium-loading-indicator';
             loadingDiv.style.cssText = `
@@ -1171,6 +1252,13 @@ class CesiumCityJSONViewer {
         const loadingDiv = document.getElementById('cesium-loading-indicator');
         if (loadingDiv) {
             loadingDiv.remove();
+        }
+        this.isLoading = false;
+
+        if (this.pendingFilePath) {
+            const nextFilePath = this.pendingFilePath;
+            this.pendingFilePath = null;
+            setTimeout(() => this.loadCityJSON(nextFilePath), 0);
         }
     }
     

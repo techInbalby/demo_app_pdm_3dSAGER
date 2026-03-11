@@ -14,6 +14,9 @@
     <script src="https://cdn.jsdelivr.net/npm/proj4@2.9.0/dist/proj4.js"></script>
     <!-- Cesium JS -->
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
+    <script>
+        window.CESIUM_ION_TOKEN = {{ cesium_ion_token | tojson }};
+    </script>
     <!-- Note: No Cesium Ion token needed - we're using ellipsoid terrain instead of world terrain -->
     <!-- This works perfectly for displaying CityJSON building models -->
     

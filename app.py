@@ -117,7 +117,8 @@ def index():
 @app.route('/demo')
 def demo():
     """Demo page with 3D viewer"""
-    return render_template('demo.html')
+    cesium_ion_token = os.getenv('CESIUM_ION_TOKEN', '')
+    return render_template('demo.html', cesium_ion_token=cesium_ion_token)
 
 
 @app.route('/api/data/files')
