@@ -16,11 +16,16 @@ class CesiumCityJSONViewer {
         this.container = document.getElementById(containerId);
         this.viewer = null;
         this.cityObjects = {};
+        this.cityObjectsByFile = new Map();
         this.buildingEntities = new Map(); // Store building entities for click handling
         this.idMapping = new Map(); // Pre-computed ID mapping for fast lookups: numericId -> [all variations]
         this.isInitialized = false;
         this.isLoading = false;
-        this.pendingFilePath = null;
+        this.pendingLoads = [];
+        this.layerEntities = new Map();
+        this.layerSource = new Map(); // filePath -> source ('A' or 'B')
+        this.currentLayerFilePath = null;
+        this.currentLayerSource = null;
         this.boundingBox = null; // Store bounding box for camera fitting
         this.crs = null; // Store coordinate reference system from metadata
         this.sourceCRS = null; // Source CRS from CityJSON metadata
@@ -93,6 +98,8 @@ class CesiumCityJSONViewer {
                     imageryProvider = osmImagery;
                 }
             }
+            this.osmImageryProvider = osmImagery;
+            this.ionImageryProvider = ionImageryProvider;
             
             // For comparison viewers, use minimal features for faster loading
             const viewerOptions = this.isComparisonViewer ? {
@@ -100,23 +107,23 @@ class CesiumCityJSONViewer {
                 imageryProvider: false, // No imagery for faster loading
                 baseLayerPicker: false,
                 vrButton: false,
-                geocoder: false,
+                geocoder: true,
                 homeButton: false,
-                sceneModePicker: false,
-                navigationHelpButton: false,
+                sceneModePicker: true,
+                navigationHelpButton: true,
                 animation: false,
                 timeline: false,
-                fullscreenButton: false,
+                fullscreenButton: true,
                 infoBox: false,
                 selectionIndicator: false,
                 shouldAnimate: false
             } : {
                 terrainProvider: new Cesium.EllipsoidTerrainProvider(), // Simple ellipsoid terrain
                 imageryProvider,
-                baseLayerPicker: false, // Disable to avoid Ion token requirement
-                vrButton: false,
-                geocoder: false, // Geocoder may also use Ion, disable if not needed
-                homeButton: false, // Disable default home button - we'll add custom reset button
+                baseLayerPicker: true,
+                vrButton: true,
+                geocoder: true,
+                homeButton: true,
                 sceneModePicker: true,
                 navigationHelpButton: true,
                 animation: false,
@@ -211,8 +218,14 @@ class CesiumCityJSONViewer {
                 const entity = pickedObject.id;
                 const buildingId = entity.buildingId;
                 
-                if (buildingId && this.cityObjects[buildingId]) {
-                    this.onBuildingClicked(buildingId, entity);
+                const cityObjects = entity.filePath
+                    ? (this.cityObjectsByFile.get(entity.filePath) || {})
+                    : this.cityObjects;
+                if (buildingId && cityObjects[buildingId]) {
+                    if (entity.filePath && typeof window.setActiveFileFromViewer === 'function') {
+                        window.setActiveFileFromViewer(entity.filePath);
+                    }
+                    this.onBuildingClicked(buildingId, entity, cityObjects[buildingId]);
                 }
             } else {
                 // Clicked on nothing - close info box
@@ -232,8 +245,8 @@ class CesiumCityJSONViewer {
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     }
     
-    onBuildingClicked(buildingId, entity) {
-        const cityObject = this.cityObjects[buildingId];
+    onBuildingClicked(buildingId, entity, cityObjectOverride) {
+        const cityObject = cityObjectOverride || this.cityObjects[buildingId];
         
         // Select the entity (for highlighting)
         this.viewer.selectedEntity = entity;
@@ -288,25 +301,29 @@ class CesiumCityJSONViewer {
             });
     }
     
-    loadCityJSON(filePath) {
+    loadCityJSON(filePath, options = {}) {
         if (!this.isInitialized) {
             console.error('Viewer not initialized');
             return;
         }
         
         console.log('Loading CityJSON file:', filePath);
+        const { append = false, source = null } = options;
 
         if (this.isLoading) {
-            this.pendingFilePath = filePath;
-            this.updateLoadingProgress('Switching to latest selection...');
+            this.pendingLoads.push({ filePath, options });
+            this.updateLoadingProgress('Queueing layer load...');
             return;
         }
 
         this.isLoading = true;
-        this.pendingFilePath = null;
+        this.currentLayerFilePath = filePath;
+        this.currentLayerSource = source;
         
         // Clear existing buildings
-        this.clearBuildings();
+        if (!append) {
+            this.clearBuildings();
+        }
         
         // Show loading
         this.showLoading();
@@ -344,7 +361,11 @@ class CesiumCityJSONViewer {
         const parseStartTime = performance.now();
         try {
             // Store city objects
-            this.cityObjects = cityJSON.CityObjects || {};
+            const cityObjects = cityJSON.CityObjects || {};
+            this.cityObjects = cityObjects;
+            if (this.currentLayerFilePath) {
+                this.cityObjectsByFile.set(this.currentLayerFilePath, cityObjects);
+            }
             const vertices = cityJSON.vertices || [];
             const transform = cityJSON.transform || null;
             
@@ -359,7 +380,7 @@ class CesiumCityJSONViewer {
                 ]);
             }
             
-            console.log(`Parsing CityJSON: ${Object.keys(this.cityObjects).length} objects, ${vertices.length} vertices`);
+            console.log(`Parsing CityJSON: ${Object.keys(cityObjects).length} objects, ${vertices.length} vertices`);
             
             // Try to use metadata.geographicalExtent first (most accurate)
             // Format: [minx, miny, minz, maxx, maxy, maxz] in the file's CRS
@@ -399,7 +420,7 @@ class CesiumCityJSONViewer {
             }
             
             // Process city objects in batches to avoid blocking UI
-            const objectIds = Object.keys(this.cityObjects);
+            const objectIds = Object.keys(cityObjects);
             const totalObjects = objectIds.length;
             let entityCount = 0;
             let processedCount = 0;
@@ -408,7 +429,7 @@ class CesiumCityJSONViewer {
             if (this.isComparisonViewer && totalObjects === 1) {
                 console.log('Comparison viewer: rendering single building immediately');
                 const objectId = objectIds[0];
-                const cityObject = this.cityObjects[objectId];
+                const cityObject = cityObjects[objectId];
                 const geometries = cityObject.geometry || [];
                 
                 console.log(`Comparison viewer: Building ID: ${objectId}, geometries: ${geometries.length}, vertices: ${vertices.length}`);
@@ -472,7 +493,7 @@ class CesiumCityJSONViewer {
                 
                 for (let i = startIndex; i < endIndex; i++) {
                     const objectId = objectIds[i];
-                    const cityObject = this.cityObjects[objectId];
+                    const cityObject = cityObjects[objectId];
                     const geometries = cityObject.geometry || [];
                     
                     geometries.forEach(geometry => {
@@ -757,11 +778,12 @@ class CesiumCityJSONViewer {
             const entity = this.viewer.entities.add({
                 name: cityObject.attributes?.name || objectId,
                 buildingId: objectId,
+                filePath: this.currentLayerFilePath,
                 polygon: {
                     hierarchy: positions,
                     extrudedHeight: height,
                     height: 0, // Base at ground level
-                    material: this.getMaterialForObjectType(cityObject.type),
+                    material: this.getMaterialForObjectType(cityObject.type, this.currentLayerSource),
                     outline: true,
                     outlineColor: Cesium.Color.BLACK.withAlpha(0.3),
                     outlineWidth: 1
@@ -776,6 +798,16 @@ class CesiumCityJSONViewer {
                 this._updateIdMapping(objectId);
             }
             this.buildingEntities.get(objectId).push(entity);
+
+            if (this.currentLayerFilePath) {
+                if (!this.layerEntities.has(this.currentLayerFilePath)) {
+                    this.layerEntities.set(this.currentLayerFilePath, []);
+                }
+                this.layerEntities.get(this.currentLayerFilePath).push(entity);
+                if (this.currentLayerSource) {
+                    this.layerSource.set(this.currentLayerFilePath, this.currentLayerSource);
+                }
+            }
             
             console.log(`Successfully created entity for ${objectId}, height: ${height.toFixed(2)}m, positions: ${positions.length}`);
             return entity;
@@ -934,21 +966,35 @@ class CesiumCityJSONViewer {
         return 10;
     }
     
-    getMaterialForObjectType(objectType) {
-        // Colors with full opacity (255 = fully opaque, no transparency)
-        const colors = {
-            'Building': Cesium.Color.fromBytes(116, 151, 223, 255), // Default blue
-            'BuildingPart': Cesium.Color.fromBytes(116, 151, 223, 255),
+    getMaterialForObjectType(objectType, source) {
+        // Source A (Candidates) → blue  (rgb 116,151,223)
+        // Source B (Index)      → teal  (rgb  38,166,154) — distinct from all pipeline colours
+        const isSourceB = source === 'B';
+        const colors = isSourceB ? {
+            'Building':             Cesium.Color.fromBytes( 38, 166, 154, 255), // teal
+            'BuildingPart':         Cesium.Color.fromBytes( 38, 166, 154, 255),
+            'BuildingInstallation': Cesium.Color.fromBytes( 38, 166, 154, 255),
+            'Bridge':               Cesium.Color.fromBytes( 70, 130, 120, 255),
+            'BridgePart':           Cesium.Color.fromBytes( 70, 130, 120, 255),
+            'Road':                 Cesium.Color.fromBytes(153, 153, 153, 255),
+            'WaterBody':            Cesium.Color.fromBytes( 77, 166, 255, 255),
+            'PlantCover':           Cesium.Color.fromBytes( 57, 172,  57, 255),
+            'LandUse':              Cesium.Color.fromBytes(255, 255, 179, 255)
+        } : {
+            'Building':             Cesium.Color.fromBytes(116, 151, 223, 255), // blue
+            'BuildingPart':         Cesium.Color.fromBytes(116, 151, 223, 255),
             'BuildingInstallation': Cesium.Color.fromBytes(116, 151, 223, 255),
-            'Bridge': Cesium.Color.fromBytes(153, 153, 153, 255),
-            'BridgePart': Cesium.Color.fromBytes(153, 153, 153, 255),
-            'Road': Cesium.Color.fromBytes(153, 153, 153, 255),
-            'WaterBody': Cesium.Color.fromBytes(77, 166, 255, 255),
-            'PlantCover': Cesium.Color.fromBytes(57, 172, 57, 255),
-            'LandUse': Cesium.Color.fromBytes(255, 255, 179, 255)
+            'Bridge':               Cesium.Color.fromBytes(153, 153, 153, 255),
+            'BridgePart':           Cesium.Color.fromBytes(153, 153, 153, 255),
+            'Road':                 Cesium.Color.fromBytes(153, 153, 153, 255),
+            'WaterBody':            Cesium.Color.fromBytes( 77, 166, 255, 255),
+            'PlantCover':           Cesium.Color.fromBytes( 57, 172,  57, 255),
+            'LandUse':              Cesium.Color.fromBytes(255, 255, 179, 255)
         };
-        
-        return colors[objectType] || Cesium.Color.fromBytes(136, 136, 136, 255);
+        const fallback = isSourceB
+            ? Cesium.Color.fromBytes(38, 166, 154, 255)
+            : Cesium.Color.fromBytes(136, 136, 136, 255);
+        return colors[objectType] || fallback;
     }
     
     /**
@@ -1129,6 +1175,23 @@ class CesiumCityJSONViewer {
         return html;
     }
     
+    zoomToLayer(filePath) {
+        if (!filePath || !this.viewer) return;
+        const entities = this.layerEntities.get(filePath) || [];
+        if (entities.length === 0) {
+            console.warn('No entities found for layer:', filePath);
+            return;
+        }
+        this.viewer.flyTo(entities, {
+            duration: 1.5,
+            offset: new Cesium.HeadingPitchRange(
+                0,
+                Cesium.Math.toRadians(-60),
+                0
+            )
+        });
+    }
+
     fitCameraToBuildings() {
         // Get all building entities
         const entities = [];
@@ -1195,9 +1258,14 @@ class CesiumCityJSONViewer {
         this.buildingEntities.clear();
         this.idMapping.clear(); // Clear ID mapping cache
         this.cityObjects = {};
+        this.layerEntities.clear();
+        this.layerSource.clear();
+        this.cityObjectsByFile.clear();
         this.boundingBox = null;
         this.crs = null;
         this.sourceCRS = null;
+        this.currentLayerFilePath = null;
+        this.pendingLoads = [];
         this.initialCameraPosition = null; // Clear initial camera position when clearing buildings
     }
     
@@ -1206,6 +1274,28 @@ class CesiumCityJSONViewer {
         if (placeholder) {
             placeholder.remove();
         }
+    }
+
+    removeLayer(filePath) {
+        if (!filePath || !this.viewer) {
+            return;
+        }
+        const entities = this.layerEntities.get(filePath) || [];
+        entities.forEach((entity) => {
+            this.viewer.entities.remove(entity);
+        });
+        this.layerEntities.delete(filePath);
+        this.layerSource.delete(filePath);
+        this.cityObjectsByFile.delete(filePath);
+
+        this.buildingEntities.forEach((entityArray, buildingId) => {
+            const remaining = entityArray.filter((entity) => entity.filePath !== filePath);
+            if (remaining.length > 0) {
+                this.buildingEntities.set(buildingId, remaining);
+            } else {
+                this.buildingEntities.delete(buildingId);
+            }
+        });
     }
     
     showLoading() {
@@ -1255,10 +1345,9 @@ class CesiumCityJSONViewer {
         }
         this.isLoading = false;
 
-        if (this.pendingFilePath) {
-            const nextFilePath = this.pendingFilePath;
-            this.pendingFilePath = null;
-            setTimeout(() => this.loadCityJSON(nextFilePath), 0);
+        if (this.pendingLoads.length > 0) {
+            const nextLoad = this.pendingLoads.shift();
+            setTimeout(() => this.loadCityJSON(nextLoad.filePath, nextLoad.options), 0);
         }
     }
     
@@ -1330,6 +1419,30 @@ class CesiumCityJSONViewer {
     toggleFullscreen() {
         if (this.viewer && this.viewer.fullscreenButton) {
             this.viewer.fullscreenButton.viewModel.command();
+        }
+    }
+
+    zoomIn() {
+        if (!this.viewer || !this.viewer.camera) return;
+        this.viewer.camera.zoomIn(this.viewer.camera.positionCartographic.height * 0.2);
+    }
+
+    zoomOut() {
+        if (!this.viewer || !this.viewer.camera) return;
+        this.viewer.camera.zoomOut(this.viewer.camera.positionCartographic.height * 0.2);
+    }
+
+    setBasemap(mode) {
+        if (!this.viewer || !this.viewer.imageryLayers) return;
+        if (mode === 'satellite' && this.ionImageryProvider) {
+            this.viewer.imageryLayers.removeAll();
+            this.viewer.imageryLayers.addImageryProvider(this.ionImageryProvider);
+            return;
+        }
+        // Default to OSM
+        if (this.osmImageryProvider) {
+            this.viewer.imageryLayers.removeAll();
+            this.viewer.imageryLayers.addImageryProvider(this.osmImageryProvider);
         }
     }
     

@@ -42,7 +42,6 @@
             <div class="mobile-actions">
                 <button class="mobile-action-btn" data-target="viewer-section" data-title="3D Viewer">3D Viewer</button>
                 <button class="mobile-action-btn" data-target="file-selection-section" data-title="Select Layer">Select Layer</button>
-                <button class="mobile-action-btn" data-target="location-section" data-title="Location">Show Location</button>
                 <button class="mobile-action-btn" data-target="pipeline-section" data-title="3dSAGER Pipeline">Pipeline Steps</button>
             </div>
             
@@ -67,15 +66,10 @@
                 </div>
             </div>
             
-            <!-- Location Map -->
-            <div class="location-map" id="location-section">
-                <h3>Location</h3>
-                <div id="location-map" style="height: 200px; width: 100%; border-radius: 8px; margin-top: 10px;"></div>
-            </div>
-            
             <!-- Pipeline Steps -->
             <div class="pipeline-steps" id="pipeline-section">
                 <h3>3dSAGER Pipeline</h3>
+                <div id="pipeline-active-file" class="pipeline-active-file" style="display:none;"></div>
                 <div class="step" id="step-1">
                     <div class="step-number">1</div>
                     <div class="step-status"></div>
@@ -131,8 +125,7 @@
                 <div class="viewer-header">
                     <h3>3D City Model Viewer</h3>
                     <div class="viewer-controls">
-                        <button class="control-btn" onclick="resetViewerCamera()" title="Reset to initial view">Reset View</button>
-                        <button class="control-btn" onclick="toggleFullscreen()">Fullscreen</button>
+                        <!-- Cesium built-in UI controls will be enabled in the viewer -->
                     </div>
                 </div>
                 
@@ -140,6 +133,11 @@
                     <div class="placeholder">
                         <div class="placeholder-icon">🏢</div>
                         <p>Select a CityJSON file to view</p>
+                    </div>
+                    <!-- Floating legend overlay inside the Cesium viewer -->
+                    <div id="viewer-legend" class="viewer-legend" style="display:none;">
+                        <div class="viewer-legend-title">Layers</div>
+                        <div id="viewer-legend-items" class="viewer-legend-items"></div>
                     </div>
                 </div>
             </div>

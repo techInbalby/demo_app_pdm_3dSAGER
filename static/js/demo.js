@@ -16,6 +16,22 @@ let pipelineState = {
     step3Completed: false  // Entity Resolution
 };
 
+let layerState = {};
+
+function getSelectedSummaryFiles() {
+    // Only Candidates (Source A) files have classifier metrics
+    const visibleA = Object.entries(layerState)
+        .filter(([, state]) => state.visible && state.source === 'A')
+        .map(([filePath]) => filePath);
+    if (visibleA.length > 0) {
+        return visibleA;
+    }
+    if (selectedFile) {
+        return [selectedFile];
+    }
+    return [];
+}
+
 // Tutorial system
 let tutorialState = {
     currentStep: 0,
@@ -567,7 +583,6 @@ function closeTutorialGuide() {
 document.addEventListener('DOMContentLoaded', function() {
     console.log('3dSAGER Demo initialized');
     loadDataFiles();
-    initLocationMap();
     updatePipelineUI(); // Initialize pipeline UI
     showWelcomeGuideIfNeeded(); // Show tutorial if needed
     setupWelcomeGuideClickHandlers(); // Setup click handlers for tutorial
@@ -609,13 +624,34 @@ function renderFileList(source, files) {
     files.forEach(file => {
         const fileItem = document.createElement('div');
         fileItem.className = 'file-item';
+        const isChecked = layerState[file.path]?.visible === true;
         fileItem.innerHTML = `
-            <div class="file-name">${file.filename}</div>
-            <div class="file-size">${(file.size / 1024 / 1024).toFixed(2)} MB</div>
+            <label class="file-toggle" title="${isChecked ? 'Hide layer' : 'Show layer'}">
+                <input type="checkbox" data-path="${file.path}" data-source="${source}" ${isChecked ? 'checked' : ''}>
+            </label>
+            <div class="file-meta">
+                <div class="file-name">${file.filename}</div>
+                <div class="file-size">${(file.size / 1024 / 1024).toFixed(2)} MB</div>
+            </div>
+            <button class="zoom-layer-btn" title="Zoom to layer" ${isChecked ? '' : 'disabled'}>⌖</button>
         `;
-        fileItem.onclick = () => selectFile(file.path, source);
+        fileItem.querySelector('input').addEventListener('change', (event) => {
+            const checked = event.target.checked;
+            toggleLayer(file.path, source, checked);
+            // enable/disable zoom button together with layer visibility
+            const zoomBtn = fileItem.querySelector('.zoom-layer-btn');
+            if (zoomBtn) zoomBtn.disabled = !checked;
+        });
+        fileItem.querySelector('.file-meta').addEventListener('click', () => {
+            selectFile(file.path, source);
+        });
+        fileItem.querySelector('.zoom-layer-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            zoomToLayer(file.path);
+        });
         container.appendChild(fileItem);
     });
+    updateActiveFileHighlight();
 }
 
 // Show source tab
@@ -631,6 +667,154 @@ function showSource(source) {
     currentSource = source;
 }
 
+// Source colour map — must match cesium-cityjson-viewer.js getMaterialForObjectType
+const SOURCE_COLORS = {
+    A: 'rgb(116,151,223)',  // blue  — Candidates
+    B: 'rgb(38,166,154)'    // teal  — Index
+};
+
+function toggleLayer(filePath, source, shouldShow) {
+    layerState[filePath] = {
+        visible: shouldShow,
+        source
+    };
+
+    const escapeForSelector = (value) => {
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+            return window.CSS.escape(value);
+        }
+        return value.replace(/"/g, '\\"');
+    };
+    const checkbox = document.querySelector(`input[type="checkbox"][data-path="${escapeForSelector(filePath)}"]`);
+    if (checkbox && checkbox.checked !== shouldShow) {
+        checkbox.checked = shouldShow;
+    }
+
+    if (shouldShow) {
+        if (window.viewer && window.viewer.loadCityJSON) {
+            window.viewer.loadCityJSON(filePath, { append: true, source });
+        }
+        // Auto-select first visible Source A file as the pipeline file
+        if (source === 'A' && !selectedFile) {
+            setPipelineFile(filePath);
+        }
+    } else {
+        if (window.viewer && window.viewer.removeLayer) {
+            window.viewer.removeLayer(filePath);
+        }
+        // If the pipeline file was hidden, pick another visible Source A file or clear
+        if (source === 'A' && selectedFile === filePath) {
+            const nextA = Object.entries(layerState).find(
+                ([fp, s]) => s.source === 'A' && s.visible && fp !== filePath
+            );
+            setPipelineFile(nextA ? nextA[0] : null);
+        }
+    }
+
+    updateActiveFileHighlight();
+    updateViewerLegend();
+}
+
+function setPipelineFile(filePath) {
+    selectedFile = filePath;
+    buildingStatusCache = null;
+    const btn = document.getElementById('step-btn-1');
+    if (btn) btn.disabled = !filePath;
+    if (!filePath) {
+        resetPipelineState();
+        updatePipelineUI();
+    }
+    // Update the active-file banner in the pipeline section
+    const banner = document.getElementById('pipeline-active-file');
+    if (banner) {
+        if (filePath) {
+            const name = filePath.split('/').pop();
+            banner.innerHTML = `<span class="pipeline-active-dot"></span>Running on: <strong>${name}</strong>`;
+            banner.style.display = 'flex';
+        } else {
+            banner.style.display = 'none';
+        }
+    }
+    updateActiveFileHighlight();
+}
+
+function updateActiveFileHighlight() {
+    // Mark the active pipeline file in the file list
+    document.querySelectorAll('.file-item').forEach(item => {
+        const cb = item.querySelector('input[type="checkbox"]');
+        if (!cb) return;
+        const fp = cb.getAttribute('data-path');
+        item.classList.toggle('file-item--active', fp === selectedFile);
+    });
+}
+
+function updateViewerLegend() {
+    const legendEl = document.getElementById('viewer-legend');
+    const itemsEl  = document.getElementById('viewer-legend-items');
+    if (!legendEl || !itemsEl) return;
+
+    const visibleA = [];
+    const visibleB = [];
+    Object.entries(layerState).forEach(([fp, state]) => {
+        if (!state.visible) return;
+        const name = fp.split('/').pop();
+        if (state.source === 'A') visibleA.push({ name, fp });
+        else if (state.source === 'B') visibleB.push({ name, fp });
+    });
+
+    if (visibleA.length === 0 && visibleB.length === 0) {
+        legendEl.style.display = 'none';
+        return;
+    }
+
+    let html = '';
+    const buildGroup = (label, fileEntries, color) => {
+        if (fileEntries.length === 0) return '';
+        let rows = `<div class="viewer-legend-group">${label}</div>`;
+        fileEntries.forEach(({ name, fp }) => {
+            rows += `<div class="viewer-legend-row">
+                <span class="viewer-legend-swatch" style="background:${color};"></span>
+                <span title="${name}" style="flex:1;overflow:hidden;text-overflow:ellipsis;">${name}</span>
+                <button class="legend-zoom-btn" onclick="zoomToLayer('${fp.replace(/'/g, "\\'")}')">⌖</button>
+            </div>`;
+        });
+        return rows;
+    };
+    html += buildGroup('Candidates (A)', visibleA, SOURCE_COLORS.A);
+    html += buildGroup('Index (B)',       visibleB, SOURCE_COLORS.B);
+
+    // Pipeline colour key (only when step 3 done)
+    if (pipelineState && pipelineState.step3Completed) {
+        html += `<div class="viewer-legend-group" style="margin-top:6px;">Results</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(76,175,80);"></span>True match</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(244,67,54);"></span>False positive</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,152,0);"></span>Has features</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(80,80,80);"></span>No match</div>`;
+    }
+
+    itemsEl.innerHTML = html;
+    legendEl.style.display = 'block';
+}
+
+function zoomToLayer(filePath) {
+    if (window.viewer && window.viewer.zoomToLayer) {
+        window.viewer.zoomToLayer(filePath);
+    }
+}
+
+function setActiveFileFromViewer(filePath) {
+    if (!filePath) {
+        return;
+    }
+    selectedFile = filePath;
+    if (filePath.includes('/Source A/')) {
+        currentSource = 'A';
+        document.getElementById('step-btn-1').disabled = false;
+    } else if (filePath.includes('/Source B/')) {
+        currentSource = 'B';
+    }
+}
+
 // Select a file
 function selectFile(filePath, source) {
     console.log('Selecting file:', filePath, source);
@@ -640,12 +824,15 @@ function selectFile(filePath, source) {
     // Allow selecting from any source (Candidates or Index)
     // Users can view files from both sources in any order
     // Reset pipeline state and store file only if from Candidates (for pipeline steps)
-    if (source === 'A') {
+    if (source === 'A' && selectedFile !== filePath) {
         resetPipelineState();
-        selectedFile = filePath; // Store selected file for pipeline steps
-        buildingStatusCache = null; // Clear cache when selecting new file
-        // Enable step 1 button when candidates file is selected
-        document.getElementById('step-btn-1').disabled = false;
+        setPipelineFile(filePath);
+        updatePipelineUI();
+    }
+    
+    // Ensure layer is visible when selected
+    if (!layerState[filePath]?.visible) {
+        toggleLayer(filePath, source, true);
     }
     
     // Call API to select file
@@ -658,7 +845,6 @@ function selectFile(filePath, source) {
     .then(data => {
         if (data.success) {
             currentSessionId = data.session_id;
-            loadFileInViewer(filePath);
             
             // Update tutorial state when file is loaded
             if (!tutorialState.completed) {
@@ -2328,25 +2514,35 @@ function viewResults() {
     // Show loading overlay
     showLoading('Loading classifier results and updating colors...');
     
-    // Load results summary
-    fetch(`/api/classifier/summary?file=${encodeURIComponent(selectedFile)}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                console.error('Error loading summary:', data.error);
-                hideLoading();
-                alert('Error loading classifier results summary: ' + data.error);
-                stepBtn.textContent = 'Run Classifier';
-                stepBtn.disabled = false;
-                return;
-            }
-            
+    const targetFiles = getSelectedSummaryFiles();
+    if (targetFiles.length === 0) {
+        hideLoading();
+        alert('Please select at least one file.');
+        stepBtn.textContent = 'Run Classifier';
+        stepBtn.disabled = false;
+        return;
+    }
+
+    Promise.all(
+        targetFiles.map((filePath) =>
+            fetch(`/api/classifier/summary?file=${encodeURIComponent(filePath)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    return { filePath, data };
+                })
+        )
+    )
+        .then(results => {
             // Update loading message
             showLoading('Updating building colors...');
             
             // Mark step 3 as completed
             pipelineState.step3Completed = true;
             updatePipelineUI();
+            updateViewerLegend();
             
             // Show summary button after Matching Classifier is completed
             const summaryBtn = document.getElementById('step-btn-3-summary');
@@ -2364,7 +2560,7 @@ function viewResults() {
                 hideLoading();
                 
                 // Show results summary window
-                showClassifierResultsSummary(data);
+                showClassifierResultsSummary(results);
             });
             
             stepBtn.textContent = 'Completed';
@@ -2798,8 +2994,24 @@ function toggleFullscreen() {
 function resetViewerCamera() {
     if (window.viewer && window.viewer.resetCamera) {
         window.viewer.resetCamera();
-    } else {
-        console.warn('Viewer not available or resetCamera method not found');
+    }
+}
+
+function zoomInViewer() {
+    if (window.viewer && window.viewer.zoomIn) {
+        window.viewer.zoomIn();
+    }
+}
+
+function zoomOutViewer() {
+    if (window.viewer && window.viewer.zoomOut) {
+        window.viewer.zoomOut();
+    }
+}
+
+function setBasemap(mode) {
+    if (window.viewer && window.viewer.setBasemap) {
+        window.viewer.setBasemap(mode);
     }
 }
 
@@ -2872,8 +3084,13 @@ function showClassifierResultsSummary(data) {
     // Clear previous content
     summaryContent.innerHTML = '';
     
+    // Accept either an array of {filePath, data} entries or a single data object
+    const summaries = Array.isArray(data)
+        ? data
+        : [{ filePath: selectedFile, data }];
+
     // Create summary display
-    const summary = data.summary || {
+    const _summaryDefaults = {
         total_buildings: 0,
         total_buildings_in_file: 0,
         potential_true_matches: 0,
@@ -2905,143 +3122,55 @@ function showClassifierResultsSummary(data) {
         best_match_f1_score: 0
     };
     
-    // Get file name from selectedFile
-    const fileName = selectedFile ? selectedFile.split('/').pop() : 'Unknown File';
-    
-    const summaryHTML = `
-        <div style="padding: 0; box-sizing: border-box;">
-            <h4 style="margin-top: 0; color: #667eea; margin-bottom: 10px;">Matching Results Summary (Per File)</h4>
-            <div style="font-size: 14px; color: #666; margin-bottom: 15px; padding: 8px 12px; background: #f5f5f5; border-radius: 6px; border-left: 3px solid #667eea;">
-                <strong>Selected File:</strong> ${fileName}
-            </div>
-            
-            <!-- Potential True Matches and BKAFI Coverage -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; box-sizing: border-box;">
-                <div style="background: #e3f2fd; padding: 12px; border-radius: 8px; border-left: 4px solid #2196f3; box-sizing: border-box;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Potential True Matches in BKAFI</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${summary.potential_true_matches}</div>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">In BKAFI blocking sets</div>
-                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                        Buildings whose ID exists in both Source A (candidates) and Source B (index), and were included in BKAFI blocking sets (have candidate pairs generated). These are potential true matches that went through the full pipeline.
-                    </div>
-                </div>
-                
-                <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Potential True Matches NOT in BKAFI</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.potential_true_matches_not_in_bkafi}</div>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">Not in BKAFI blocking sets</div>
-                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                        Buildings whose ID exists in both Source A and Source B, but were NOT included in BKAFI blocking results.
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Recall Metrics -->
-            <div style="margin-bottom: 20px;">
-                <h5 style="color: #667eea; margin-bottom: 10px;">Recall Metrics</h5>
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; box-sizing: border-box;">
-                    <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4caf50; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Overall Recall</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${(summary.overall_recall * 100).toFixed(2)}%</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Of all potential true matches (buildings with ID in both Source A and Source B), how many were correctly identified by the full pipeline (BKAFI blocking + matching classifier).
-                        </div>
-                    </div>
-                    
-                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">BKAFI Blocking Recall</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${(summary.blocking_recall * 100).toFixed(2)}%</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Of all potential true matches, how many were included in BKAFI blocking sets (have candidate pairs generated). This measures the blocking step's coverage.
-                        </div>
-                    </div>
-                    
-                    <div style="background: #e3f2fd; padding: 12px; border-radius: 8px; border-left: 4px solid #2196f3; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Matching Recall</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${(summary.matching_recall * 100).toFixed(2)}%</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Of all potential true matches that were in BKAFI blocking sets, how many were correctly identified by the matching classifier. This measures the classifier's performance on the blocking set.
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Precision Metrics -->
-            <div style="margin-bottom: 20px;">
-                <h5 style="color: #667eea; margin-bottom: 10px;">Precision Metrics</h5>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; box-sizing: border-box;">
-                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Precision (confidence > 0.5)</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${(summary.precision_conf_threshold * 100).toFixed(2)}%</div>
-                        <div style="font-size: 12px; color: #666; margin-top: 5px;">${summary.predicted_with_conf_threshold} predictions</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Pair-level precision when allowing multiple matches per candidate building: among all candidate–index pairs with classifier confidence > 0.5, the fraction that are true matches.
-                        </div>
-                    </div>
-                    
-                    <div style="background: #f3e5f5; padding: 12px; border-radius: 8px; border-left: 4px solid #9c27b0; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Precision (best match)</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #9c27b0;">${(summary.precision_highest_conf * 100).toFixed(2)}%</div>
-                        <div style="font-size: 12px; color: #666; margin-top: 5px;">${summary.predicted_highest_conf} best matches</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Precision when selecting a single match per candidate building: for each candidate, take the highest-confidence pair; keep it only if confidence > 0.5. This reports how often that top prediction is a true match.
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Pair Statistics (Best Match) -->
-            <div style="margin-bottom: 20px;">
-                <h5 style="color: #667eea; margin-bottom: 10px;">Pair Statistics (Best Match Strategy)</h5>
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; box-sizing: border-box;">
-                    <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4caf50; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">True Positive</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${summary.best_match_true_positives || summary.true_positive}</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Candidate–index pairs correctly predicted as matches using the best match strategy (highest confidence per candidate with confidence > 0.5) where the candidate and index IDs are identical.
-                        </div>
-                    </div>
-                    
-                    <div style="background: #ffebee; padding: 12px; border-radius: 8px; border-left: 4px solid #f44336; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Positive</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #f44336;">${summary.best_match_false_positives || summary.false_positive}</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            Candidate–index pairs incorrectly predicted as matches using the best match strategy (highest confidence per candidate with confidence > 0.5) where the candidate and index IDs are different.
-                        </div>
-                    </div>
-                    
-                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Negative (in BKAFI)</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.best_match_false_negative_in_blocking || 0}</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            True matches (same ID) that were in BKAFI blocking sets but were missed by the best match strategy (highest confidence was ≤ 0.5 or a different pair had higher confidence).
-                        </div>
-                    </div>
-                    
-                    <div style="background: #fff9c4; padding: 12px; border-radius: 8px; border-left: 4px solid #fbc02d; box-sizing: border-box;">
-                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Negative (not in BKAFI)</div>
-                        <div style="font-size: 24px; font-weight: bold; color: #fbc02d;">${summary.best_match_false_negative_not_in_blocking || 0}</div>
-                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                            True matches (same ID) that were not included in BKAFI blocking sets, so they could not be identified by the matching classifier.
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Overall Metrics -->
-            <div style="margin-bottom: 20px;">
-                <div style="background: #f5f5f5; padding: 12px; border-radius: 8px; box-sizing: border-box;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">F1 Score (Best Match)</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #333;">${(summary.best_match_f1_score * 100).toFixed(2)}%</div>
-                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
-                        Harmonic mean of precision and recall for the best match strategy (highest confidence per candidate with confidence > 0.5). Provides a balanced evaluation metric that considers both prediction accuracy and coverage.
-                    </div>
-                </div>
-            </div>
+    const getFileName = (fp) => fp ? fp.split('/').pop() : 'Unknown File';
+    const pct = (v) => (v * 100).toFixed(1) + '%';
+    const row = (label, value, color, help, sub = '') => `
+        <tr class="srow">
+            <td class="srow-label">${label} <button class="info-badge" data-help="${help}">i</button></td>
+            <td class="srow-value" style="color:${color};">${value}</td>
+            ${sub ? `<td class="srow-sub">${sub}</td>` : '<td></td>'}
+        </tr>`;
+    const groupRow = (label) => `
+        <tr><td colspan="3" class="srow-group">${label}</td></tr>`;
+
+    const buildSection = (summary, filePath, idx) => `
+        <div class="summary-section${idx > 0 ? ' summary-section--sep' : ''}">
+            <div class="summary-file-label">${getFileName(filePath)}</div>
+            <table class="summary-table">
+                <tbody>
+                    ${groupRow('Coverage')}
+                    ${row('True matches in BKAFI',     summary.potential_true_matches,             '#2196f3', 'Buildings in both Source A and B that appear in BKAFI blocking sets.')}
+                    ${row('True matches NOT in BKAFI', summary.potential_true_matches_not_in_bkafi, '#ff9800', 'Buildings in both sources but absent from BKAFI blocking.')}
+                    ${groupRow('Recall')}
+                    ${row('Overall recall',     pct(summary.overall_recall),   '#4caf50', 'Of all potential true matches, how many were correctly found end-to-end.')}
+                    ${row('BKAFI blocking recall', pct(summary.blocking_recall), '#ff9800', 'Of all potential true matches, how many entered BKAFI blocking.')}
+                    ${row('Matching recall',    pct(summary.matching_recall),  '#2196f3', 'Of true matches that reached blocking, how many the classifier found.')}
+                    ${groupRow('Precision')}
+                    ${row('Precision (conf > 0.5)', pct(summary.precision_conf_threshold), '#ff9800', 'Among all pairs predicted with confidence > 0.5, fraction that are true matches.', summary.predicted_with_conf_threshold + ' pairs')}
+                    ${row('Precision (best match)',  pct(summary.precision_highest_conf),  '#9c27b0', 'Best-match strategy: one prediction per candidate.', summary.predicted_highest_conf + ' pairs')}
+                    ${groupRow('Pair counts (best match)')}
+                    ${row('True positive',             summary.best_match_true_positives || summary.true_positive, '#4caf50', 'Correctly predicted matches.')}
+                    ${row('False positive',            summary.best_match_false_positives || summary.false_positive, '#f44336', 'Incorrectly predicted matches.')}
+                    ${row('False negative (in BKAFI)', summary.best_match_false_negative_in_blocking || 0, '#ff9800', 'Missed true matches that were in BKAFI blocking.')}
+                    ${row('False negative (no BKAFI)', summary.best_match_false_negative_not_in_blocking || 0, '#fbc02d', 'Missed true matches that never reached blocking.')}
+                    ${groupRow('Score')}
+                    ${row('F1 (best match)', pct(summary.best_match_f1_score), '#333', 'Harmonic mean of precision and recall for the best-match strategy.')}
+                </tbody>
+            </table>
         </div>
     `;
+
+    const summaryHTML = `<div style="padding: 0; box-sizing: border-box;">
+        ${summaries.length > 1 ? `<h4 style="margin-top:0;color:#667eea;margin-bottom:10px;">Matching Results Summary (${summaries.length} files)</h4>` : '<h4 style="margin-top:0;color:#667eea;margin-bottom:10px;">Matching Results Summary (Per File)</h4>'}
+        ${summaries.map((entry, idx) => {
+            const s = (entry.data ? entry.data.summary : entry.summary) || _summaryDefaults;
+            const fp = entry.filePath || selectedFile;
+            return buildSection(s, fp, idx);
+        }).join('')}
+    </div>`;
     
     summaryContent.innerHTML = summaryHTML;
+    initSummaryHelpHandlers();
     
     // Show the window
     summaryWindow.style.display = 'block';
@@ -3065,7 +3194,8 @@ function showSummaryFromStep3() {
         return;
     }
     
-    if (!selectedFile) {
+    const targetFiles = getSelectedSummaryFiles();
+    if (targetFiles.length === 0) {
         alert('Please select a file first.');
         return;
     }
@@ -3075,20 +3205,19 @@ function showSummaryFromStep3() {
     // Show loading overlay
     showLoading('Loading classifier results summary...');
     
-    // Load results summary
-    fetch(`/api/classifier/summary?file=${encodeURIComponent(selectedFile)}`)
-        .then(response => response.json())
-        .then(data => {
+    Promise.all(
+        targetFiles.map((filePath) =>
+            fetch(`/api/classifier/summary?file=${encodeURIComponent(filePath)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    return { filePath, data };
+                })
+        )
+    )
+        .then(results => {
             hideLoading();
-            
-            if (data.error) {
-                console.error('Error loading summary:', data.error);
-                alert('Error loading classifier results summary: ' + data.error);
-                return;
-            }
-            
-            // Show the summary
-            showClassifierResultsSummary(data);
+            showClassifierResultsSummary(results);
         })
         .catch(error => {
             hideLoading();
@@ -3109,6 +3238,22 @@ function closeResultsSummaryWindow() {
     if (overlay) {
         overlay.classList.remove('active');
     }
+}
+
+function initSummaryHelpHandlers() {
+    const badges = document.querySelectorAll('.info-badge');
+    if (!badges.length) {
+        return;
+    }
+    badges.forEach((badge) => {
+        badge.addEventListener('click', (event) => {
+            event.stopPropagation();
+            badge.classList.toggle('active');
+        });
+    });
+    document.addEventListener('click', () => {
+        badges.forEach((badge) => badge.classList.remove('active'));
+    }, { once: true });
 }
 
 // Close matches window
@@ -3145,3 +3290,6 @@ window.closeMatchesWindow = closeMatchesWindow;
 window.viewMatch = viewMatch;
 window.showBuildingProperties = showBuildingProperties;
 window.closeBuildingProperties = closeBuildingProperties;
+window.updateViewerLegend = updateViewerLegend;
+window.setActiveFileFromViewer = setActiveFileFromViewer;
+window.zoomToLayer = zoomToLayer;
