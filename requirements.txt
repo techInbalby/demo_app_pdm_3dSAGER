@@ -26,3 +26,6 @@ redis
 # Compression for API responses
 Flask-Compress==1.14
 gunicorn
+
+# Coordinate transformation (used by scripts/prebake_cityjson.py at build time)
+pyproj

@@ -84,24 +84,36 @@ def build_features_from_parquet(parquet_path: Path):
 
 
 def get_features_cache(file_path):
+    # Prefer in-process memory to avoid a Redis round-trip + json.loads on every call
+    if file_path in features_cache:
+        return features_cache[file_path]
     cached = cache_get_json(f'features:{file_path}')
     if cached is not None:
+        features_cache[file_path] = cached  # warm the in-process cache
         return cached
-    return features_cache.get(file_path)
+    return None
 
 
 def get_bkafi_cache():
+    # Prefer in-process memory to avoid a Redis round-trip + json.loads on every call
+    global bkafi_cache
+    if bkafi_cache is not None:
+        return bkafi_cache
     cached = cache_get_json('bkafi:flat')
     if cached is not None:
+        bkafi_cache = cached  # warm the in-process cache
         return cached
-    return bkafi_cache
+    return None
 
 
 def get_bkafi_by_file_cache():
+    if hasattr(app, 'bkafi_cache_by_file') and app.bkafi_cache_by_file is not None:
+        return app.bkafi_cache_by_file
     cached = cache_get_json('bkafi:by_file')
     if cached is not None:
+        app.bkafi_cache_by_file = cached  # warm the in-process cache
         return cached
-    return getattr(app, 'bkafi_cache_by_file', None)
+    return None
 
 # Ensure directories exist
 for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, LOGS_DIR]:
@@ -159,6 +171,10 @@ def get_files():
             files = []
             if directory.exists() and directory.is_dir():
                 for file_path in directory.rglob('*.json'):
+                    # Skip pre-baked files — they're an internal optimisation,
+                    # not separate layers the user should see or load directly.
+                    if file_path.name.endswith('.prebaked.json'):
+                        continue
                     try:
                         rel_path = file_path.relative_to(DATA_DIR)
                         files.append({
@@ -273,7 +289,15 @@ def get_file(file_path):
                 'data_dir': str(DATA_DIR),
                 'data_dir_exists': DATA_DIR.exists()
             }), 404
-        
+
+        # Prefer the pre-baked variant when it exists next to the original file.
+        # The pre-baked file has WGS84 footprint+height pre-computed; the browser
+        # skips all proj4 transforms and vertex math, loading ~10× faster.
+        prebaked_path = found_path.with_suffix('.prebaked.json')
+        if prebaked_path.exists():
+            found_path = prebaked_path
+            print(f"DEBUG: Using pre-baked file: {found_path}")
+
         # Read and return the JSON file
         # Data is now in the image, so no OneDrive file locking issues
         print(f"DEBUG: Reading file: {found_path}")
@@ -339,6 +363,17 @@ def get_file_by_query():
 features_cache = {}
 # Global cache for BKAFI results
 bkafi_cache = None
+# In-process cache for computed buildings status (keyed by file_path)
+_buildings_status_cache: dict = {}
+
+
+def invalidate_buildings_status_cache(file_path: str = None):
+    """Invalidate the computed buildings status cache.
+    Pass file_path to evict a single file, or None to clear all entries."""
+    if file_path is not None:
+        _buildings_status_cache.pop(file_path, None)
+    else:
+        _buildings_status_cache.clear()
 
 @app.route('/api/features/calculate', methods=['POST'])
 def calculate_all_features():
@@ -356,13 +391,20 @@ def calculate_all_features():
         print(f"Calculating features for all buildings in file: {file_path}")
 
         cache_key = f"features:{file_path}"
-        cached_features = cache_get_json(cache_key)
-        if cached_features is not None:
-            features_cache[file_path] = cached_features
+
+        # Fast existence check: use the compact ID list (tiny) instead of loading 6+ MB of feature values
+        if file_path in features_cache:
             return jsonify({
                 'success': True,
                 'message': f'Features already cached for {file_path}',
-                'building_count': len(cached_features)
+                'building_count': len(features_cache[file_path])
+            })
+        features_ids = cache_get_json(f'features_ids:{file_path}')
+        if features_ids is not None:
+            return jsonify({
+                'success': True,
+                'message': f'Features already cached for {file_path}',
+                'building_count': len(features_ids)
             })
 
         if get_redis_client():
@@ -377,6 +419,8 @@ def calculate_all_features():
             building_features = build_features_from_parquet(FEATURES_PARQUET)
             features_cache[file_path] = building_features
             cache_set_json(cache_key, building_features)
+            cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
+            invalidate_buildings_status_cache(file_path)
             return jsonify({
                 'success': True,
                 'message': f'Features loaded from parquet for {file_path}',
@@ -441,6 +485,8 @@ def calculate_all_features():
         # Store in cache (using the reorganized structure)
         features_cache[file_path] = building_features
         cache_set_json(cache_key, building_features)
+        cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
+        invalidate_buildings_status_cache(file_path)
         
         # Return success with count
         building_count = len(building_features)
@@ -594,6 +640,8 @@ def get_building_features(building_id):
         # Store in cache
         features_cache[file_path] = building_features
         cache_set_json(f'features:{file_path}', building_features)
+        cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
+        invalidate_buildings_status_cache(file_path)
         
         # Try exact match first
         if building_id in building_features:
@@ -740,6 +788,7 @@ def load_bkafi_results():
 
         cache_set_json('bkafi:flat', flattened_cache)
         cache_set_json('bkafi:by_file', results_dict)
+        invalidate_buildings_status_cache()
         
         return jsonify({
             'success': True,
@@ -1089,6 +1138,7 @@ def get_building_bkafi(building_id):
                 bkafi_cache_local = flattened_cache
                 cache_set_json('bkafi:flat', flattened_cache)
                 cache_set_json('bkafi:by_file', results_dict)
+                invalidate_buildings_status_cache()
                 print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
             else:
                 return jsonify({
@@ -1192,6 +1242,7 @@ def get_building_matches(building_id):
                 bkafi_cache_local = flattened_cache
                 cache_set_json('bkafi:flat', flattened_cache)
                 cache_set_json('bkafi:by_file', results_dict)
+                invalidate_buildings_status_cache()
                 print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
             else:
                 return jsonify({
@@ -1276,16 +1327,32 @@ def get_all_buildings_status():
         file_path = request.args.get('file', '')
         if not file_path:
             return jsonify({'error': 'No file path provided'}), 400
-        
+
+        # Return cached result if available (invalidated when BKAFI or features data changes)
+        if file_path in _buildings_status_cache:
+            cached_result = _buildings_status_cache[file_path]
+            resp = jsonify({
+                'success': True,
+                'buildings': cached_result,
+                'total': len(cached_result)
+            })
+            resp.headers['Cache-Control'] = 'no-store'
+            return resp
+
         print(f"Getting status for all buildings in file: {file_path}")
         
         result = {}
         
         # 1. Check which buildings have features
+        # Use compact ID list (written by Celery task) to avoid loading 6+ MB of feature values
         has_features = set()
-        features_data = get_features_cache(file_path)
-        if isinstance(features_data, dict):
-            has_features = set(features_data.keys())
+        features_ids = cache_get_json(f'features_ids:{file_path}')
+        if features_ids is not None:
+            has_features = set(features_ids)
+        else:
+            features_data = get_features_cache(file_path)
+            if isinstance(features_data, dict):
+                has_features = set(features_data.keys())
         
         # 2. Check which buildings have BKAFI pairs
         has_pairs = set()
@@ -1368,11 +1435,16 @@ def get_all_buildings_status():
                 'match_status': match_status.get(building_id_str, None)
             }
         
-        return jsonify({
+        # Store computed result in cache
+        _buildings_status_cache[file_path] = result
+
+        resp = jsonify({
             'success': True,
             'buildings': result,
             'total': len(result)
         })
+        resp.headers['Cache-Control'] = 'no-store'
+        return resp
         
     except Exception as e:
         import traceback

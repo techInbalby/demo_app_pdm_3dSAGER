@@ -29,10 +29,18 @@ COPY templates/ templates/
 COPY static/ static/
 COPY deploy/ deploy/
 
+# Copy scripts
+COPY scripts/ scripts/
+
 # Copy data directory into image
 # This avoids file locking issues with cloud storage (OneDrive) mounts
 # Data is baked into the image, so updates require rebuild
 COPY data/ /app/data/
+
+# Pre-bake CityJSON files: transform coords to WGS84 and extract footprint+height.
+# This eliminates client-side proj4 transforms and vertex processing, cutting
+# browser parse time from ~30 s per file to under 2 s.
+RUN DATA_DIR=/app/data python scripts/prebake_cityjson.py
 
 # Create necessary directories
 RUN mkdir -p logs results saved_model_files && \

@@ -66,6 +66,7 @@ def calculate_features(file_path):
         building_features = _build_features_from_parquet(PARQUET_PATH)
         cache_key = f'features:{file_path}'
         _cache_set_json(cache_key, building_features)
+        _cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
         return {
             'cache_key': cache_key,
             'building_count': len(building_features)
@@ -108,6 +109,8 @@ def calculate_features(file_path):
 
     cache_key = f'features:{file_path}'
     _cache_set_json(cache_key, building_features)
+    # Store compact ID-only list so /api/buildings/status avoids loading 6.5 MB of features
+    _cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
 
     return {
         'cache_key': cache_key,

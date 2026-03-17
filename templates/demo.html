@@ -41,28 +41,16 @@
 
             <div class="mobile-actions">
                 <button class="mobile-action-btn" data-target="viewer-section" data-title="3D Viewer">3D Viewer</button>
-                <button class="mobile-action-btn" data-target="file-selection-section" data-title="Select Layer">Select Layer</button>
                 <button class="mobile-action-btn" data-target="pipeline-section" data-title="3dSAGER Pipeline">Pipeline Steps</button>
             </div>
             
-            <!-- File Selection -->
-            <div class="file-selection" id="file-selection-section">
-                <h3>Select Data Source</h3>
-                <div class="source-tabs">
-                    <button class="tab-btn active" onclick="showSource('A')">Candidates</button>
-                    <button class="tab-btn" onclick="showSource('B')">Index</button>
-                </div>
-                
+            <!-- File Selection (hidden — layers are auto-loaded; DOM kept for JS compatibility) -->
+            <div class="file-selection" id="file-selection-section" style="display:none;">
                 <div id="sourceA" class="source-content active">
-                    <div class="file-list" id="filesA">
-                        <div class="loading">Loading files...</div>
-                    </div>
+                    <div class="file-list" id="filesA"></div>
                 </div>
-                
                 <div id="sourceB" class="source-content">
-                    <div class="file-list" id="filesB">
-                        <div class="loading">Loading files...</div>
-                    </div>
+                    <div class="file-list" id="filesB"></div>
                 </div>
             </div>
             
@@ -119,6 +107,14 @@
             </div>
         </div>
         
+        <!-- Layer legend panel — sits between sidebar and map -->
+        <div class="legend-col" id="legend-col" style="display:none;">
+            <div id="viewer-legend" class="viewer-legend">
+                <div class="viewer-legend-title">Layers</div>
+                <div id="viewer-legend-items" class="viewer-legend-items"></div>
+            </div>
+        </div>
+
         <!-- Main Content -->
         <div class="main-content">
             <div class="viewer-container" id="viewer-section">
@@ -133,11 +129,6 @@
                     <div class="placeholder">
                         <div class="placeholder-icon">🏢</div>
                         <p>Select a CityJSON file to view</p>
-                    </div>
-                    <!-- Floating legend overlay inside the Cesium viewer -->
-                    <div id="viewer-legend" class="viewer-legend" style="display:none;">
-                        <div class="viewer-legend-title">Layers</div>
-                        <div id="viewer-legend-items" class="viewer-legend-items"></div>
                     </div>
                 </div>
             </div>
@@ -164,6 +155,7 @@
             <div class="building-info">
                 <h4 id="building-props-name" style="display: none;">Building Name</h4>
                 <p id="building-props-id">ID: -</p>
+                <div id="building-props-sources" class="building-props-sources" style="display: none;"></div>
             </div>
             <div class="properties-actions">
                 <button class="action-btn" id="calc-features-btn" onclick="calculateGeometricFeatures()" disabled>Calculate Geometric Features</button>
@@ -213,25 +205,24 @@
         </div>
         <div class="comparison-content">
             <div class="comparison-layout">
-                <!-- Left side: Candidate building (centered vertically) -->
+                <!-- Left side: Candidate building -->
                 <div class="comparison-viewer-container">
                     <div class="viewer-label">Candidate Building</div>
                     <div id="comparison-viewer-candidate" class="comparison-viewer"></div>
                     <div class="viewer-building-id" id="comparison-candidate-id">Loading...</div>
-                    <!-- Button to show classifier predictions and true labels - under candidate building -->
-                    <div id="comparison-classifier-section" style="margin-top: 15px; padding: 15px; display: none;">
-                        <button class="action-btn" id="show-classifier-results-btn" style="width: 100%;">Show Classifier Results</button>
-                        <div id="classifier-results" style="margin-top: 15px;"></div>
-                    </div>
                 </div>
-                
-                <!-- Right side: BKAFI pairs (stacked vertically) -->
+
+                <!-- Right side: BKAFI pairs carousel -->
                 <div class="comparison-pairs-container">
                     <div class="viewer-label">BKAFI Pairs</div>
                     <div id="comparison-pairs-viewers" class="comparison-pairs-viewers">
-                        <!-- Pair viewers will be added here dynamically -->
+                        <!-- Carousel card will be added here dynamically -->
                     </div>
                 </div>
+            </div>
+
+            <!-- Model info: below both viewers -->
+            <div id="comparison-classifier-section" style="display: none;">
             </div>
         </div>
     </div>

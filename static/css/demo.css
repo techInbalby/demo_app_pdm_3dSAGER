@@ -302,6 +302,18 @@ body {
     position: relative;
 }
 
+/* Step 1: orange when current (Geometric Featurization) */
+.step.step-current-orange { border-left-color: rgb(255, 152, 0); }
+.step.step-current-orange .step-number { background: rgb(255, 152, 0); }
+
+/* Step 2: yellow when current (BKAFI Blocking) */
+.step.step-current-yellow { border-left-color: rgb(255, 193, 7); }
+.step.step-current-yellow .step-number { background: rgb(255, 193, 7); color: #333; }
+
+/* Any step: green when completed */
+.step.step-completed { border-left-color: #28a745; }
+.step.step-completed .step-number { background: #28a745; color: white; }
+
 .step-number {
     width: 30px;
     height: 30px;
@@ -430,80 +442,236 @@ body {
     background: #f8f9fa;
 }
 
-/* Floating legend — dark Cesium-style panel */
-.viewer-legend {
+/* Touch-friendly map controls (zoom, rotate, tilt, home) — right side above Cesium toolbar */
+.viewer-map-controls {
     position: absolute;
-    bottom: 28px;
-    left: 12px;
-    z-index: 100;
-    background: rgba(38, 38, 38, 0.88);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 6px;
-    padding: 8px 12px;
-    min-width: 160px;
+    right: 12px;
+    bottom: 50px;
+    z-index: 110;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     pointer-events: auto;
-    backdrop-filter: blur(4px);
+}
+.viewer-map-control-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    line-height: 1;
+    color: rgba(255,255,255,0.95);
+    background: rgba(38, 38, 38, 0.88);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+.viewer-map-control-btn:hover {
+    background: rgba(55, 55, 55, 0.95);
+    color: #fff;
+}
+.viewer-map-control-btn:active {
+    transform: scale(0.96);
+}
+.viewer-map-control-btn-home {
+    font-size: 18px;
+    margin-top: 4px;
+}
+
+/* Floating legend — dark Cesium-style panel */
+/* ── Layer legend panel column ───────────────────────────────────────────── */
+
+/* The legend is now a fixed-width column between the sidebar and the map,
+   not an overlay on top of the Cesium canvas. */
+.legend-col {
+    width: 190px;
+    flex-shrink: 0;
+    background: #fff;
+    border-right: 1px solid #e0e0e0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.viewer-legend {
+    padding: 12px 10px 16px;
+    flex: 1;
 }
 
 .viewer-legend-title {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    color: rgba(255,255,255,0.6);
+    color: #888;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 6px;
+    letter-spacing: 0.07em;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #eee;
 }
 
 .viewer-legend-items {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 3px;
 }
 
 .viewer-legend-group {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    color: rgba(255,255,255,0.5);
+    color: #999;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    margin-top: 4px;
+    margin-top: 10px;
+    margin-bottom: 2px;
 }
 
 .viewer-legend-row {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 5px;
     font-size: 12px;
-    color: rgba(255,255,255,0.85);
+    color: #444;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 220px;
 }
 
 .viewer-legend-swatch {
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
     flex-shrink: 0;
-    border: 1px solid rgba(255,255,255,0.2);
+    border: 1px solid rgba(0,0,0,0.12);
 }
 
-/* Zoom-to-layer button inside the floating legend */
+/* ── Legend interactive layer controls ───────────────────────────────────── */
+
+.legend-layer-row {
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding: 3px 2px;
+    border-radius: 4px;
+    transition: background 0.1s;
+}
+.legend-layer-row:hover { background: #f5f5f5; }
+
+.legend-row-unloaded { opacity: 0.45; }
+
+/* Checkbox */
+.legend-layer-cb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    border: 1.5px solid #bbb;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+    flex-shrink: 0;
+    position: relative;
+    transition: background 0.15s, border-color 0.15s;
+}
+.legend-layer-cb:checked {
+    background: #7497df;
+    border-color: #7497df;
+}
+.legend-layer-cb:checked::after {
+    content: '';
+    display: block;
+    position: absolute;
+    left: 2px; top: 0px;
+    width: 5px; height: 8px;
+    border: 2px solid #fff;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+}
+.legend-layer-cb:hover { border-color: #667eea; }
+
+/* Layer name */
+.legend-layer-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: #444;
+    min-width: 0;
+}
+.legend-row-active .legend-layer-name { color: #667eea; font-weight: 600; }
+
+/* "active" badge shown next to active Source-A layer */
+.legend-active-tag {
+    display: inline-block;
+    padding: 0 3px;
+    font-size: 8px;
+    border-radius: 3px;
+    background: #667eea;
+    color: #fff;
+    vertical-align: middle;
+    line-height: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+/* "Set active" button — shown for loaded Source-A layers that aren't the active pipeline */
+.legend-activate-btn {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    color: #888;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 4px;
+    line-height: 14px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+.legend-activate-btn:hover {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}
+
+/* Dim button */
+.legend-dim-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 1px;
+    line-height: 1;
+    flex-shrink: 0;
+    color: #bbb;
+    transition: color 0.15s;
+}
+.legend-dim-btn:hover:not(:disabled) { color: #333; }
+.legend-dim-btn:disabled { opacity: 0.25; cursor: default; }
+.legend-dim-btn.btn-dimmed { color: #ff9800; }
+
+/* Zoom-to-layer button */
 .legend-zoom-btn {
     background: none;
     border: none;
-    color: rgba(255,255,255,0.55);
+    color: #bbb;
     cursor: pointer;
-    font-size: 14px;
-    padding: 0 2px;
+    font-size: 13px;
+    padding: 0 1px;
     line-height: 1;
     flex-shrink: 0;
     transition: color 0.15s;
 }
-.legend-zoom-btn:hover {
-    color: #fff;
-}
+.legend-zoom-btn:hover:not(:disabled) { color: #333; }
+.legend-zoom-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* Zoom-to-layer button in the file list */
 .zoom-layer-btn {
@@ -929,6 +1097,27 @@ body {
     font-weight: 600;
 }
 
+.building-props-sources {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #e0e0e0;
+}
+.building-props-sources .building-sources-label {
+    margin: 0 0 4px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+}
+.building-props-sources .building-sources-list {
+    margin: 0;
+    font-size: 12px;
+    font-weight: normal;
+    color: #333;
+    word-break: break-all;
+    max-height: 3.6em;
+    overflow-y: auto;
+}
+
 .matches-list {
     display: flex;
     flex-direction: column;
@@ -1125,9 +1314,9 @@ body {
     }
     
     .comparison-viewer {
-        height: 220px;
-        min-height: 220px;
-        max-height: 220px;
+        height: 180px;
+        min-height: 180px;
+        max-height: 180px;
     }
     
     .comparison-pair-viewer {
@@ -1163,11 +1352,9 @@ body {
 
 .comparison-layout {
     display: flex;
-    gap: 15px; /* Reduced gap to save space */
-    flex: 1;
-    min-height: 0; /* Allow flex children to shrink */
-    /* Remove fixed height to allow content to expand and enable scrolling */
-    align-items: flex-start; /* Align items to top */
+    gap: 15px;
+    flex: 0 0 auto; /* Don't grow — let classifier section sit naturally below */
+    align-items: stretch; /* Both columns same height */
 }
 
 .comparison-viewer-container {
@@ -1198,10 +1385,10 @@ body {
 
 .comparison-viewer {
     width: 100%;
-    height: 180px; /* Same size as pair viewers */
-    min-height: 180px;
-    max-height: 180px;
-    flex-shrink: 0; /* Prevent flexbox from shrinking this element */
+    height: 240px;
+    min-height: 240px;
+    max-height: 240px;
+    flex-shrink: 0;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
     overflow: hidden;
@@ -1213,20 +1400,28 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 8px; /* Further reduced gap */
+    gap: 8px;
     min-height: 0;
-    overflow: hidden; /* No scrolling - all pairs should fit */
-    /* Distribute space evenly among pairs */
+    overflow: hidden;
+}
+
+/* Carousel card fills the right column */
+#carousel-pair-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
 }
 
 #comparison-classifier-section {
     width: 100%;
     border-top: 2px solid #e0e0e0;
-    flex: 1; /* Take remaining space in the container */
+    padding-top: 12px;
+    margin-top: 12px;
     display: flex;
     flex-direction: column;
-    min-height: 0; /* Allow flex children to shrink */
-    margin-top: 10px;
+    gap: 6px;
 }
 
 #classifier-results {
@@ -1260,6 +1455,283 @@ body {
 .comparison-pair-item {
     display: flex;
     flex-direction: column;
+    border: 3px solid transparent;
+    border-radius: 8px;
+    padding: 4px;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+    position: relative;
+}
+.comparison-pair-item:hover:not(.pair-revealed) {
+    border-color: #667eea55;
+    box-shadow: 0 0 0 2px #667eea33;
+}
+.comparison-pair-item.pair-selected {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 3px #f59e0b44;
+    transform: scale(1.01);
+}
+.comparison-pair-item.pair-result-true {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 3px #22c55e44;
+}
+.comparison-pair-item.pair-result-false-positive {
+    border-color: #f97316;
+    box-shadow: 0 0 0 3px #f9731644;
+}
+.comparison-pair-item.pair-result-no-match {
+    border-color: #94a3b8;
+}
+
+/* Pick button on each pair card */
+.pair-pick-btn {
+    display: block;
+    width: 100%;
+    margin-top: 5px;
+    padding: 6px 0;
+    background: #667eea;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    letter-spacing: 0.02em;
+}
+.pair-pick-btn:hover { background: #5a6fd6; }
+.pair-pick-btn.selected {
+    background: #f59e0b;
+    color: #fff;
+}
+.pair-pick-btn:disabled { background: #94a3b8; cursor: default; }
+
+/* Your-pick badge on top of viewer */
+.pair-your-pick-badge {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #f59e0b;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 12px;
+    z-index: 20;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* Result badge (after reveal) */
+.pair-result-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-top: 4px;
+}
+.pair-result-badge.true-match  { background: #22c55e; color: #fff; }
+.pair-result-badge.false-pos   { background: #f97316; color: #fff; }
+.pair-result-badge.no-match    { background: #94a3b8; color: #fff; }
+
+/* ── Pair carousel ──────────────────────────────────────────────────────────── */
+.carousel-nav-btn {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(102, 126, 234, 0.82);
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+    line-height: 1;
+    padding: 0;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 20;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.carousel-nav-btn:hover  { background: rgba(90, 111, 214, 0.95); }
+.carousel-nav-btn:active { transform: translateY(-50%) scale(0.93); }
+.carousel-nav-btn:disabled { background: rgba(203,213,225,0.7); color: #94a3b8; cursor: default; }
+
+.carousel-nav-prev { left: 8px; }
+.carousel-nav-next { right: 8px; }
+
+/* Counter pill — floating at top-center of viewer */
+.carousel-counter-overlay {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(30, 30, 50, 0.6);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 3px 14px;
+    border-radius: 20px;
+    z-index: 20;
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: 0.02em;
+}
+.carousel-dot-row {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+.carousel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #cbd5e1;
+    transition: background 0.2s, transform 0.2s;
+}
+.carousel-dot.active {
+    background: #667eea;
+    transform: scale(1.2);
+}
+.carousel-dot.picked  { background: #f59e0b; }
+.carousel-dot.result-true { background: #22c55e; }
+.carousel-dot.result-fp   { background: #f97316; }
+.carousel-dot.result-none { background: #94a3b8; }
+
+/* Single pair card (carousel) — border goes on the viewer box itself via .comparison-viewer */
+.carousel-pair-card {
+    display: flex;
+    flex-direction: column;
+}
+/* After reveal, result border is applied to the viewer box inside the card */
+.carousel-pair-card.pair-selected      > .comparison-viewer { border-color: #f59e0b; box-shadow: 0 0 0 3px #f59e0b33; }
+.carousel-pair-card.pair-result-true   > .comparison-viewer { border-color: #22c55e; box-shadow: 0 0 0 3px #22c55e33; }
+.carousel-pair-card.pair-result-false-positive > .comparison-viewer { border-color: #f97316; box-shadow: 0 0 0 3px #f9731633; }
+.carousel-pair-card.pair-result-no-match > .comparison-viewer { border-color: #94a3b8; }
+
+/* "Your Pick" ribbon inside carousel */
+.carousel-your-pick {
+    display: none;
+    position: absolute;
+    top: 8px; left: 50%;
+    transform: translateX(-50%);
+    background: #f59e0b;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 12px;
+    border-radius: 12px;
+    z-index: 20;
+    white-space: nowrap;
+    pointer-events: none;
+}
+.carousel-your-pick.visible { display: block; }
+
+/* Carousel result badge */
+.carousel-result-badge {
+    display: none;
+    text-align: center;
+    padding: 4px 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+}
+.carousel-result-badge.visible { display: block; }
+.carousel-result-badge.true-match  { color: #16a34a; }
+.carousel-result-badge.false-pos   { color: #ea580c; }
+.carousel-result-badge.no-match    { color: #64748b; }
+
+/* ────────────────────────────────────────────────────────────────────────────── */
+
+/* Game intro bar */
+.game-intro-bar {
+    background: linear-gradient(90deg, #667eea11, #764ba211);
+    border: 1px solid #667eea33;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: #444;
+    margin-bottom: 12px;
+    text-align: center;
+}
+.game-intro-bar strong { color: #667eea; }
+
+/* Guess bar under candidate */
+.game-guess-bar {
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    font-size: 13px;
+    text-align: center;
+    color: #555;
+    width: 100%;
+}
+.game-guess-bar .guess-text { font-weight: 600; color: #f59e0b; }
+
+/* Reveal button */
+.reveal-answer-btn {
+    display: inline-block;
+    width: auto;
+    padding: 9px 24px;
+    background: #22c55e;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    letter-spacing: 0.03em;
+}
+.reveal-answer-btn:hover { background: #16a34a; }
+.reveal-answer-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Back to Map button */
+.back-to-map-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 20px;
+    background: #667eea;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    align-self: center;
+    margin-top: 4px;
+}
+.back-to-map-btn:hover  { background: #5a6fd6; }
+.back-to-map-btn:active { transform: scale(0.97); }
+
+/* Score banner (after reveal) */
+.game-score-banner {
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    width: 100%;
+    animation: fadeInScale 0.3s ease;
+}
+.game-score-banner.correct   { background: #dcfce7; color: #16a34a; border: 1.5px solid #22c55e; }
+.game-score-banner.incorrect { background: #ffedd5; color: #c2410c; border: 1.5px solid #f97316; }
+.game-score-banner.no-pick   { background: #f1f5f9; color: #475569; border: 1.5px solid #94a3b8; }
+
+@keyframes fadeInScale {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: scale(1); }
 }
 
 .comparison-pair-label {

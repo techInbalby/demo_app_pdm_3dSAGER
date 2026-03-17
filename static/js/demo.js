@@ -17,6 +17,11 @@ let pipelineState = {
 };
 
 let layerState = {};
+// Expose layerState on window so cesium-cityjson-viewer.js can read dimmed/hidden flags
+window.layerState = layerState;
+
+// All files returned from /api/data/files — used by the legend to show unloaded files too
+let allAvailableFiles = { A: [], B: [] };
 
 function getSelectedSummaryFiles() {
     // Only Candidates (Source A) files have classifier metrics
@@ -602,14 +607,41 @@ function setupWelcomeGuideClickHandlers() {
 
 
 
-// Load data files from API
+// Load data files from API and auto-load all layers into the viewer
 function loadDataFiles() {
     fetch('/api/data/files')
         .then(response => response.json())
         .then(data => {
             console.log('Files loaded:', data);
+
+            // Store full file list so the legend can show unloaded files too
+            allAvailableFiles = {
+                A: data.source_a || [],
+                B: data.source_b || []
+            };
+
             renderFileList('A', data.source_a);
             renderFileList('B', data.source_b);
+
+            // Show the legend immediately with all files (all checked = will load)
+            updateViewerLegend();
+
+            // Auto-load every available layer into the viewer.
+            // Source A is processed first so the pipeline-file auto-selection fires correctly.
+            const allFiles = [
+                ...data.source_a.map(f => ({ ...f, source: 'A' })),
+                ...data.source_b.map(f => ({ ...f, source: 'B' }))
+            ];
+            allFiles.forEach(f => {
+                if (!layerState[f.path] || !layerState[f.path].visible) {
+                    toggleLayer(f.path, f.source, true);
+                }
+            });
+
+            // Notify the backend which file is the active pipeline file.
+            if (data.source_a && data.source_a.length > 0 && !selectedFile) {
+                selectFile(data.source_a[0].path, 'A');
+            }
         })
         .catch(error => {
             console.error('Error loading files:', error);
@@ -673,6 +705,26 @@ const SOURCE_COLORS = {
     B: 'rgb(38,166,154)'    // teal  — Index
 };
 
+/**
+ * Load a CityJSON file into the viewer, retrying until window.viewer is ready.
+ * This handles the race between DOMContentLoaded (which fires loadDataFiles)
+ * and the Cesium viewer's async initialisation (setTimeout polling for Cesium).
+ */
+function waitForViewerThenLoad(filePath, source, attempts) {
+    attempts = attempts || 0;
+    // Must wait for BOTH the viewer object AND its async init() to complete (isInitialized).
+    // Without the isInitialized check, loadCityJSON returns early with an error when
+    // the Cesium Ion imagery await is still in flight.
+    if (window.viewer && window.viewer.isInitialized && window.viewer.loadCityJSON) {
+        window.viewer.loadCityJSON(filePath, { append: true, source });
+    } else if (attempts < 60) {
+        // Retry up to ~18 s (60 × 300 ms) while Cesium finishes initialising
+        setTimeout(() => waitForViewerThenLoad(filePath, source, attempts + 1), 300);
+    } else {
+        console.warn('Viewer never became ready for', filePath);
+    }
+}
+
 function toggleLayer(filePath, source, shouldShow) {
     layerState[filePath] = {
         visible: shouldShow,
@@ -691,9 +743,8 @@ function toggleLayer(filePath, source, shouldShow) {
     }
 
     if (shouldShow) {
-        if (window.viewer && window.viewer.loadCityJSON) {
-            window.viewer.loadCityJSON(filePath, { append: true, source });
-        }
+        // Use the retry helper so the load works even when viewer isn't ready yet
+        waitForViewerThenLoad(filePath, source);
         // Auto-select first visible Source A file as the pipeline file
         if (source === 'A' && !selectedFile) {
             setPipelineFile(filePath);
@@ -709,11 +760,46 @@ function toggleLayer(filePath, source, shouldShow) {
             );
             setPipelineFile(nextA ? nextA[0] : null);
         }
+        // Layer removed — refresh styles (remaining layer should return to full color)
+        if (window.viewer && window.viewer.applyLayerVisualStyles) {
+            window.viewer.applyLayerVisualStyles(selectedFile);
+        }
     }
 
     updateActiveFileHighlight();
     updateViewerLegend();
 }
+
+/**
+ * Toggle entity visibility for an already-loaded layer (eye button in legend).
+ * Does NOT unload the layer — it just hides or shows the Cesium entities.
+ */
+function toggleLayerVisible(filePath) {
+    if (!layerState[filePath]) return;
+    const isCurrentlyHidden = !!layerState[filePath].hidden;
+    layerState[filePath].hidden = !isCurrentlyHidden;
+    if (window.viewer && window.viewer.setLayerEntityShow) {
+        window.viewer.setLayerEntityShow(filePath, isCurrentlyHidden); // flip
+    }
+    updateViewerLegend();
+}
+
+/**
+ * Toggle the "dimmed" (semi-transparent) state for a layer (opacity button in legend).
+ * Dimmed layers always render as semi-transparent regardless of pipeline selection.
+ */
+function toggleLayerDimmed(filePath) {
+    if (!layerState[filePath]) return;
+    layerState[filePath].dimmed = !layerState[filePath].dimmed;
+    if (window.viewer && window.viewer.applyLayerVisualStyles) {
+        window.viewer.applyLayerVisualStyles(selectedFile);
+    }
+    updateViewerLegend();
+}
+
+// Expose to inline onclick handlers in the legend
+window.toggleLayerVisible = toggleLayerVisible;
+window.toggleLayerDimmed = toggleLayerDimmed;
 
 function setPipelineFile(filePath) {
     selectedFile = filePath;
@@ -736,6 +822,16 @@ function setPipelineFile(filePath) {
         }
     }
     updateActiveFileHighlight();
+    // Refresh visual styles: selected layer → full fill; others → outline/contour only
+    if (window.viewer && window.viewer.applyLayerVisualStyles) {
+        window.viewer.applyLayerVisualStyles(selectedFile);
+    }
+    // Also re-run pipeline stage colors if a stage has already been completed
+    if (window.viewer && selectedFile) {
+        if (pipelineState.step3Completed) updateBuildingColorsForStage3(true);
+        else if (pipelineState.step2Completed) updateBuildingColorsForStage2(true);
+        else if (pipelineState.step1Completed) updateBuildingColorsForStage1(true);
+    }
 }
 
 function updateActiveFileHighlight() {
@@ -749,51 +845,92 @@ function updateActiveFileHighlight() {
 }
 
 function updateViewerLegend() {
-    const legendEl = document.getElementById('viewer-legend');
+    const colEl    = document.getElementById('legend-col');
     const itemsEl  = document.getElementById('viewer-legend-items');
-    if (!legendEl || !itemsEl) return;
+    if (!colEl || !itemsEl) return;
 
-    const visibleA = [];
-    const visibleB = [];
-    Object.entries(layerState).forEach(([fp, state]) => {
-        if (!state.visible) return;
-        const name = fp.split('/').pop();
-        if (state.source === 'A') visibleA.push({ name, fp });
-        else if (state.source === 'B') visibleB.push({ name, fp });
-    });
+    const allA = allAvailableFiles.A || [];
+    const allB = allAvailableFiles.B || [];
 
-    if (visibleA.length === 0 && visibleB.length === 0) {
-        legendEl.style.display = 'none';
+    if (allA.length === 0 && allB.length === 0) {
+        colEl.style.display = 'none';
         return;
     }
+    colEl.style.display = 'flex';
 
-    let html = '';
-    const buildGroup = (label, fileEntries, color) => {
-        if (fileEntries.length === 0) return '';
+    /**
+     * Each row: [checkbox] [swatch] [name] [Set Active btn (A only)] [dim◑] [zoom⌖]
+     * Checkbox checked  = layer is loaded in the viewer
+     * Checkbox unchecked = layer is unloaded (entities removed)
+     * "Set Active" button appears for loaded Source-A layers that aren't the active pipeline layer
+     */
+    const buildGroup = (label, files, color, source) => {
+        if (files.length === 0) return '';
         let rows = `<div class="viewer-legend-group">${label}</div>`;
-        fileEntries.forEach(({ name, fp }) => {
-            rows += `<div class="viewer-legend-row">
-                <span class="viewer-legend-swatch" style="background:${color};"></span>
-                <span title="${name}" style="flex:1;overflow:hidden;text-overflow:ellipsis;">${name}</span>
-                <button class="legend-zoom-btn" onclick="zoomToLayer('${fp.replace(/'/g, "\\'")}')">⌖</button>
+        files.forEach(file => {
+            const fp    = file.path;
+            const name  = file.filename || fp.split('/').pop();
+            const state = layerState[fp] || {};
+            const loaded   = !!state.visible;
+            const dimmed   = !!state.dimmed;
+            const isActive = fp === selectedFile;
+            const safeFp   = fp.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+            const cbTitle  = loaded ? 'Unload layer from viewer' : 'Load layer into viewer';
+            const dimTitle = dimmed ? 'Restore full opacity'     : 'Dim layer';
+
+            // "ACTIVE" badge for the current pipeline layer;
+            // "Set Active" button for other loaded Source-A layers.
+            const badge = isActive
+                ? '<span class="legend-active-tag">active</span>'
+                : '';
+            const activateBtn = (source === 'A' && loaded && !isActive)
+                ? `<button class="legend-activate-btn" onclick="selectFile('${safeFp}','A')" title="Set as active pipeline layer">Set active</button>`
+                : '';
+
+            rows += `<div class="viewer-legend-row legend-layer-row${!loaded ? ' legend-row-unloaded' : ''}${isActive ? ' legend-row-active' : ''}" title="${name}">
+                <input type="checkbox" class="legend-layer-cb" ${loaded ? 'checked' : ''}
+                    onchange="toggleLayer('${safeFp}','${source}',this.checked)"
+                    title="${cbTitle}">
+                <span class="viewer-legend-swatch" style="background:${color};opacity:${loaded ? 1 : 0.35};flex-shrink:0;"></span>
+                <span class="legend-layer-name">${name}${badge}</span>
+                ${activateBtn}
+                <button class="legend-dim-btn${dimmed ? ' btn-dimmed' : ''}" title="${dimTitle}"
+                    onclick="toggleLayerDimmed('${safeFp}')" ${!loaded ? 'disabled' : ''}>◑</button>
+                <button class="legend-zoom-btn" title="Zoom to layer"
+                    onclick="zoomToLayer('${safeFp}')" ${!loaded ? 'disabled' : ''}>⌖</button>
             </div>`;
         });
         return rows;
     };
-    html += buildGroup('Candidates (A)', visibleA, SOURCE_COLORS.A);
-    html += buildGroup('Index (B)',       visibleB, SOURCE_COLORS.B);
 
-    // Pipeline colour key (only when step 3 done)
-    if (pipelineState && pipelineState.step3Completed) {
-        html += `<div class="viewer-legend-group" style="margin-top:6px;">Results</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(76,175,80);"></span>True match</div>
+    let html = '';
+    html += buildGroup('Candidates (A)', allA, SOURCE_COLORS.A, 'A');
+    html += buildGroup('Index (B)',       allB, SOURCE_COLORS.B, 'B');
+
+    // Building-status colour key (shown when at least one Candidate layer is loaded)
+    const anyALoaded = allA.some(f => layerState[f.path]?.visible);
+    if (anyALoaded) {
+        const ps = pipelineState || {};
+        html += `<div class="viewer-legend-group" style="margin-top:6px;">Building status</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(116,151,223);"></span>Default</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,152,0);"></span>Has features</div>`;
+        if (ps.step2Completed) {
+            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,235,59);"></span>Has BKAFI pairs</div>`;
+        }
+        if (ps.step3Completed) {
+            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(76,175,80);"></span>True match</div>
             <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(244,67,54);"></span>False positive</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,152,0);"></span>Has features</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(80,80,80);"></span>No match</div>`;
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(97,97,97);"></span>No match</div>`;
+        }
+        const loadedCount = allA.filter(f => layerState[f.path]?.visible).length
+                          + allB.filter(f => layerState[f.path]?.visible).length;
+        if (loadedCount > 1) {
+            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgba(180,180,180,0.22);border:2px solid rgb(80,80,80);"></span>Dimmed layers</div>`;
+        }
     }
 
     itemsEl.innerHTML = html;
-    legendEl.style.display = 'block';
 }
 
 function zoomToLayer(filePath) {
@@ -801,6 +938,10 @@ function zoomToLayer(filePath) {
         window.viewer.zoomToLayer(filePath);
     }
 }
+
+// Legend is now a fixed panel column — minimize is handled by the column itself.
+function toggleLegendMinimize() { /* no-op: legend is now a sidebar panel */ }
+window.toggleLegendMinimize = toggleLegendMinimize;
 
 function setActiveFileFromViewer(filePath) {
     if (!filePath) {
@@ -813,9 +954,20 @@ function setActiveFileFromViewer(filePath) {
     } else if (filePath.includes('/Source B/')) {
         currentSource = 'B';
     }
+    if (window.viewer && window.viewer.applyLayerVisualStyles) {
+        window.viewer.applyLayerVisualStyles(selectedFile);
+    }
+    if (window.viewer && selectedFile) {
+        if (pipelineState.step3Completed) updateBuildingColorsForStage3(true);
+        else if (pipelineState.step2Completed) updateBuildingColorsForStage2(true);
+        else if (pipelineState.step1Completed) updateBuildingColorsForStage1(true);
+    }
 }
 
 // Select a file
+// Exposed so legend onclick handlers can call it directly
+window.selectFile = function(fp, src) { selectFile(fp, src); };
+
 function selectFile(filePath, source) {
     console.log('Selecting file:', filePath, source);
 
@@ -828,6 +980,10 @@ function selectFile(filePath, source) {
         resetPipelineState();
         setPipelineFile(filePath);
         updatePipelineUI();
+        updateViewerLegend(); // refresh active badge + "Set active" buttons
+        if (window.viewer && window.viewer.applyLayerVisualStyles) {
+            window.viewer.applyLayerVisualStyles(filePath);
+        }
     }
     
     // Ensure layer is visible when selected
@@ -1118,7 +1274,9 @@ function loadFileInViewer(filePath) {
 }
 
 // Show building properties window
-function showBuildingProperties(buildingId, cityObject) {
+// options.sources = [{ filePath, source: 'A'|'B', name }] when building exists in multiple layers
+function showBuildingProperties(buildingId, cityObject, options) {
+    options = options || {};
     closeMobilePanel();
     // Update tutorial state when building is clicked
     if (!tutorialState.completed) {
@@ -1159,6 +1317,21 @@ function showBuildingProperties(buildingId, cityObject) {
     // Show only the building ID (no name)
     propsNameEl.textContent = '';
     propsIdEl.textContent = `ID: ${buildingId}`;
+    
+    // Show all sources that contain this building (when more than one)
+    const sourcesEl = document.getElementById('building-props-sources');
+    if (sourcesEl) {
+        const sources = options.sources || [];
+        if (sources.length > 1) {
+            const label = sources.length === 2 ? 'Sources' : 'In all sources';
+            const list = sources.map(s => `${s.source === 'B' ? 'Index (B)' : 'Candidates (A)'}: ${s.name}`).join('; ');
+            sourcesEl.innerHTML = `<p class="building-sources-label">${label}:</p><p class="building-sources-list" title="${sources.map(s => s.name).join(', ')}">${list}</p>`;
+            sourcesEl.style.display = 'block';
+        } else {
+            sourcesEl.innerHTML = '';
+            sourcesEl.style.display = 'none';
+        }
+    }
     
     // Clear properties list
     propsListEl.innerHTML = '';
@@ -1256,39 +1429,35 @@ function calculateGeometricFeatures() {
 
     const handleFeatureSuccess = (message) => {
         console.log('Features calculated:', message);
-        
-        // Update loading message
-        showLoading('Updating building colors...');
-        
-        // Mark step 1 as completed
-        pipelineState.step1Completed = true;
-        featuresLoaded = true;
-        updatePipelineUI();
-        
-        // Enable step 2
-        document.getElementById('step-btn-2').disabled = false;
-        
-        stepBtn.textContent = 'Completed';
-        stepBtn.style.background = '#28a745';
-        
-        // Update building colors based on features (use cached data if available, otherwise fetch)
-        updateBuildingColorsForStage1(true, () => {
-            // After bulk update, specifically update the selected building if properties window is open
-            if (selectedBuildingId) {
-                updateSelectedBuildingColor();
-            }
-            // Hide loading when color update completes
+        var safetyTimeout = setTimeout(function () {
+            console.warn('Feature success: safety timeout — hiding loading overlay');
             hideLoading();
-        });
-        
-        // If building properties window is open, show features
-        if (selectedBuildingId) {
-            loadBuildingFeatures(selectedBuildingId);
-        }
-        
-        if (calcBtn) {
-            calcBtn.textContent = 'Features Calculated';
-            calcBtn.style.background = '#28a745';
+        }, 45000);
+        var clearSafety = function () { clearTimeout(safetyTimeout); };
+        try {
+            showLoading('Updating building colors...');
+            pipelineState.step1Completed = true;
+            featuresLoaded = true;
+            updatePipelineUI();
+            updateViewerLegend();
+            var step2Btn = document.getElementById('step-btn-2');
+            if (step2Btn) step2Btn.disabled = false;
+            stepBtn.textContent = 'Completed';
+            stepBtn.style.background = '#28a745';
+            updateBuildingColorsForStage1(true, function () {
+                clearSafety();
+                if (selectedBuildingId) updateSelectedBuildingColor();
+                hideLoading();
+            });
+            if (selectedBuildingId) loadBuildingFeatures(selectedBuildingId);
+            if (calcBtn) {
+                calcBtn.textContent = 'Features Calculated';
+                calcBtn.style.background = '#28a745';
+            }
+        } catch (err) {
+            clearSafety();
+            console.error('Error in handleFeatureSuccess:', err);
+            hideLoading();
         }
     };
 
@@ -1519,6 +1688,7 @@ function runBKAFI() {
         pipelineState.step2Completed = true;
         bkafiLoaded = true;
         updatePipelineUI();
+        updateViewerLegend();
         
         // Enable step 3
         document.getElementById('step-btn-3').disabled = false;
@@ -1713,23 +1883,79 @@ function showBkafiPairs(pairs, buildingId = null) {
 }
 
 // Open BKAFI comparison window
+// ─── Parallel loader helpers ────────────────────────────────────────────────
+/** Fetch file path + minimal CityJSON for a building (2 API calls, returns promise) */
+async function _fetchBuildingDataForComparison(buildingId) {
+    const numericId = buildingId.replace(/^[^_]*_/, '');
+    const fileData = await fetch(`/api/building/find-file/${encodeURIComponent(numericId)}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+    });
+    if (fileData.error || !fileData.file_path) throw new Error(fileData.error || 'Building not found');
+    const cityJSON = await fetch(`/api/building/single/${encodeURIComponent(numericId)}?file=${encodeURIComponent(fileData.file_path)}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+    });
+    return { buildingId, numericId, cityJSON, filePath: fileData.file_path };
+}
+
+/** Initialise a ThreeBuildingViewer inside viewerEl and load cityJSON (returns promise) */
+function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
+    return new Promise((resolve) => {
+        if (!viewerEl) { resolve(null); return; }
+        const containerId = `cv-${viewerType}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const vkey = `comparison-viewer-${viewerType}`;
+        // Dispose previous viewer for this slot
+        if (window[vkey] && window[vkey].dispose) {
+            try { window[vkey].dispose(); } catch (_) {}
+            delete window[vkey];
+        }
+        viewerEl.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#888;">Rendering…</div>';
+        viewerEl.id = containerId;
+        viewerEl.style.position = 'relative';
+        const color = viewerType === 'candidate' ? 0x2196F3 : 0x8B0000;
+        let viewer;
+        try { viewer = new ThreeBuildingViewer(containerId, color); }
+        catch (e) { viewerEl.innerHTML = `<div style="padding:12px;color:#dc3545;font-size:12px;">Init error: ${e.message}</div>`; resolve(null); return; }
+        window[vkey] = viewer;
+        let attempts = 0;
+        const check = setInterval(() => {
+            attempts++;
+            if (viewer.isInitialized) {
+                clearInterval(check);
+                try { viewer.loadBuilding(cityJSON); } catch (_) {}
+                setTimeout(() => {
+                    const msg = viewerEl.querySelector('div');
+                    if (msg && !msg.querySelector('canvas')) msg.remove();
+                    resolve(viewer);
+                }, 350);
+            } else if (attempts > 40) {
+                clearInterval(check);
+                viewerEl.innerHTML = '<div style="padding:12px;color:#dc3545;font-size:12px;">Timeout</div>';
+                resolve(null);
+            }
+        }, 100);
+    });
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 function openBkafiComparisonWindow(candidateBuildingId, pairs) {
-    console.log('Opening BKAFI comparison window for building:', candidateBuildingId, 'with', pairs.length, 'pairs');
-    
     const comparisonWindow = document.getElementById('bkafi-comparison-window');
-    if (!comparisonWindow) {
-        console.error('Comparison window not found');
-        return;
-    }
-    
-    // Store pairs data in the window for later use (for classifier results)
+    if (!comparisonWindow) return;
+
+    // ── state ────────────────────────────────────────────────────────────────
+    const pairsToShow   = pairs.slice(0, 3);
+    let   currentIdx    = 0;          // which option is shown in the carousel
+    let   userGuess     = null;       // null = not picked yet
+    let   pairCityData  = [];         // [{buildingId, cityJSON}] filled after parallel fetch
+    let   pairViewer    = null;       // single ThreeBuildingViewer for the right side
+
     comparisonWindow.setAttribute('data-candidate-id', candidateBuildingId);
     comparisonWindow.setAttribute('data-pairs', JSON.stringify(pairs));
-    
-    // Show window first
+    comparisonWindow.removeAttribute('data-revealed');
     comparisonWindow.style.display = 'flex';
-    
-    // Add overlay
+
+    // overlay
     let overlay = document.getElementById('comparison-overlay');
     if (!overlay) {
         overlay = document.createElement('div');
@@ -1739,209 +1965,301 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         document.body.appendChild(overlay);
     }
     overlay.classList.add('active');
-    
-    // Get viewer elements BEFORE cleanup (so we have references)
-    const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
-    const pairsViewersEl = document.getElementById('comparison-pairs-viewers');
-    const candidateIdEl = document.getElementById('comparison-candidate-id');
-    
-    console.log(`Viewer elements found:`, {
-        candidateViewerEl: !!candidateViewerEl,
-        pairsViewersEl: !!pairsViewersEl,
-        candidateIdEl: !!candidateIdEl
-    });
-    
-    // Clean up old viewer instances (dispose Three.js viewers)
-    cleanupComparisonViewers();
-    
-    // Completely clear and reset viewer elements AFTER cleanup
-    if (candidateViewerEl) {
-        // Clear all children and reset
-        candidateViewerEl.innerHTML = '';
-        candidateViewerEl.id = 'comparison-viewer-candidate'; // Reset ID
-        candidateViewerEl.style.position = 'relative'; // Reset positioning
-        candidateViewerEl.style.width = '100%'; // Ensure width
-        candidateViewerEl.style.height = '180px'; // Same size as pair viewers
-        
-        // Add loading message
-        const loadingDiv = document.createElement('div');
-        loadingDiv.style.cssText = 'padding: 20px; text-align: center; color: #666;';
-        loadingDiv.textContent = 'Loading candidate building...';
-        candidateViewerEl.appendChild(loadingDiv);
-        
-        console.log('Candidate viewer element reset and ready');
-    } else {
-        console.error('Candidate viewer element not found!');
-    }
-    
-    if (pairsViewersEl) {
-        pairsViewersEl.innerHTML = '';
-        console.log('Pairs viewers element cleared');
-    } else {
-        console.error('Pairs viewers element not found!');
-    }
-    
-    if (candidateIdEl) {
-        candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
-    }
-    
-    // Setup classifier results section - show button immediately (can be clicked before buildings finish loading)
-    const classifierSection = document.getElementById('comparison-classifier-section');
-    const showClassifierBtn = document.getElementById('show-classifier-results-btn');
-    const classifierResults = document.getElementById('classifier-results');
-    
-    if (classifierSection && showClassifierBtn && classifierResults) {
-        // Show classifier section immediately (button is available right away)
-        classifierSection.style.display = 'block';
-        classifierResults.innerHTML = '';
-        showClassifierBtn.textContent = 'Show Classifier Results';
-        showClassifierBtn.disabled = false;
-        
-        // Set up button click handler - use stored pairs from window
-        showClassifierBtn.onclick = () => {
-            // Get pairs from stored data
-            const storedPairs = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
-            const storedCandidateId = comparisonWindow.getAttribute('data-candidate-id') || candidateBuildingId;
-            showClassifierResultsInComparisonWindow(storedCandidateId, storedPairs);
-        };
-    }
-    
-    // Load candidate building first, then pairs sequentially
-    // Always find the file for the candidate building to ensure we load the correct one
-    const loadCandidate = () => {
-        console.log(`=== LOADING CANDIDATE BUILDING ===`);
-        console.log(`Candidate building ID: ${candidateBuildingId}`);
-        
-        // Get fresh reference to elements - try multiple ways to find it
-        let candidateEl = document.getElementById('comparison-viewer-candidate');
-        
-        // If not found by ID, try to find by data attribute or class
-        if (!candidateEl) {
-            candidateEl = document.querySelector('[data-original-id="comparison-viewer-candidate"]');
-        }
-        if (!candidateEl) {
-            candidateEl = document.querySelector('.comparison-viewer-container .comparison-viewer');
-        }
-        
-        const candidateIdElRef = document.getElementById('comparison-candidate-id');
-        
-        console.log(`Candidate viewer element (fresh):`, candidateEl);
-        console.log(`Candidate ID element (fresh):`, candidateIdElRef);
-        
-        if (!candidateEl) {
-            console.error('Candidate viewer element is null! Trying to find it again...');
-            // Try one more time after a short delay - maybe DOM isn't ready
-            setTimeout(() => {
-                let retryEl = document.getElementById('comparison-viewer-candidate');
-                if (!retryEl) {
-                    retryEl = document.querySelector('[data-original-id="comparison-viewer-candidate"]');
-                }
-                if (!retryEl) {
-                    retryEl = document.querySelector('.comparison-viewer-container .comparison-viewer');
-                }
-                
-                if (retryEl) {
-                    console.log('Found candidate element on retry');
-                    findAndLoadBuilding(candidateBuildingId, retryEl, candidateIdElRef, 'candidate', () => {
-                        console.log(`=== CANDIDATE BUILDING LOADED ===`);
-                        console.log(`Starting to load ${pairs.length} pairs`);
-                        // Load pairs sequentially (button is already visible and can be clicked)
-                        loadPairsSequentially(pairs.slice(0, 3), 0);
-                    });
-                } else {
-                    console.error('Candidate element still not found after retry');
-                    console.error('Available elements:', document.querySelectorAll('.comparison-viewer'));
-                }
-            }, 200);
-            return;
-        }
-        
-        findAndLoadBuilding(candidateBuildingId, candidateEl, candidateIdElRef, 'candidate', () => {
-            // After candidate loads, start loading pairs
-            console.log(`=== CANDIDATE BUILDING LOADED ===`);
-            console.log(`Starting to load ${pairs.length} pairs`);
-            // Load pairs sequentially (button is already visible and can be clicked)
-            loadPairsSequentially(pairs.slice(0, 3), 0);
-        });
-    };
-    
-    // Create pair viewer containers first (so they're visible)
-    const pairsToShow = pairs.slice(0, 3);
-    console.log(`Creating ${pairsToShow.length} pair viewer containers`);
-    
-    pairsToShow.forEach((pair, index) => {
-        const pairViewerEl = document.createElement('div');
-        pairViewerEl.className = 'comparison-pair-item';
-        pairViewerEl.id = `comparison-pair-${index}`;
-        
-        const pairLabel = document.createElement('div');
-        pairLabel.className = 'comparison-pair-label';
-        pairLabel.textContent = `Pair ${index + 1}`;
-        pairViewerEl.appendChild(pairLabel);
-        
-        const pairViewer = document.createElement('div');
-        pairViewer.className = 'comparison-pair-viewer';
-        pairViewer.id = `comparison-viewer-pair-${index}`;
-        pairViewer.style.position = 'relative';
-        pairViewer.style.width = '100%';
-        pairViewer.style.height = '180px'; // Same size as candidate viewer
-        pairViewer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">Waiting to load...</div>';
-        pairViewerEl.appendChild(pairViewer);
-        
-        const pairIdEl = document.createElement('div');
-        pairIdEl.className = 'viewer-building-id';
-        pairIdEl.id = `comparison-pair-id-${index}`;
-        pairIdEl.textContent = `Index: ${pair.index_id}`;
-        pairViewerEl.appendChild(pairIdEl);
-        
-        if (pairsViewersEl) {
-            pairsViewersEl.appendChild(pairViewerEl);
-            console.log(`Added pair viewer container ${index} for building ${pair.index_id}`);
-        } else {
-            console.error(`Pairs viewers element is null, cannot add pair ${index}`);
-        }
-    });
-    
-    // Small delay to ensure DOM is ready, then start loading candidate
-    setTimeout(() => {
-        console.log(`Starting to load candidate building after DOM setup`);
-        loadCandidate();
-    }, 100);
-}
 
-// Load pairs sequentially (one at a time) to avoid overwhelming the browser
-function loadPairsSequentially(pairs, currentIndex, onAllComplete = null) {
-    if (currentIndex >= pairs.length) {
-        console.log('All pairs loaded');
-        if (onAllComplete) {
-            onAllComplete();
+    const headerTitle = comparisonWindow.querySelector('.comparison-header h3');
+    if (headerTitle) headerTitle.textContent = 'Find the Best Match 🎯';
+
+    cleanupComparisonViewers();
+
+    // ── candidate viewer (left) ───────────────────────────────────────────────
+    const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
+    const candidateIdEl     = document.getElementById('comparison-candidate-id');
+    const pairsViewersEl    = document.getElementById('comparison-pairs-viewers');
+
+    if (candidateViewerEl) {
+        candidateViewerEl.innerHTML = '';
+        candidateViewerEl.id = 'comparison-viewer-candidate';
+        candidateViewerEl.style.cssText = 'width:100%;height:240px;min-height:240px;max-height:240px;position:relative;';
+    }
+    if (candidateIdEl) candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
+    if (pairsViewersEl) pairsViewersEl.innerHTML = '';
+
+    // ── intro bar ─────────────────────────────────────────────────────────────
+    const compContent = comparisonWindow.querySelector('.comparison-content');
+    let introBar = compContent && compContent.querySelector('.game-intro-bar');
+    if (!introBar && compContent) {
+        introBar = document.createElement('div');
+        introBar.className = 'game-intro-bar';
+        compContent.insertBefore(introBar, compContent.firstChild);
+    }
+    if (introBar) introBar.innerHTML = 'Look at the <strong>candidate building</strong>. Navigate the BKAFI options on the right and <strong>pick the best match</strong>.';
+
+    // ── carousel card (right side) ─────────────────────────────────────────────
+    //
+    //  ┌─────────────────────────────────┐
+    //  │  ← [Option 1 / 3] →            │  ← nav row
+    //  │  [3D viewer]                    │
+    //  │  ● ○ ○  (dots)                  │
+    //  │  Index: 051810...               │
+    //  │  [Pick This Match]              │
+    //  │  [result badge]                 │
+    //  └─────────────────────────────────┘
+
+    const card = document.createElement('div');
+    card.id = 'carousel-pair-card';
+    card.className = 'carousel-pair-card';
+    card.style.cssText = 'display:flex;flex-direction:column;';
+
+    // 3-D viewer area — arrows and counter are overlaid INSIDE the viewer so it takes no extra height
+    const pairViewerEl = document.createElement('div');
+    pairViewerEl.id = 'comparison-viewer-pair-carousel';
+    // Same CSS class as the candidate so both boxes look identical
+    pairViewerEl.className = 'comparison-viewer';
+    pairViewerEl.style.position = 'relative';
+    pairViewerEl.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#999;">Loading…</div>';
+
+    // Counter overlay (top-center of viewer)
+    const counter = document.createElement('div');
+    counter.id = 'carousel-counter';
+    counter.className = 'carousel-counter-overlay';
+    pairViewerEl.appendChild(counter);
+
+    // Prev / next arrows (overlaid on left/right edges of viewer)
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'carousel-nav-btn carousel-nav-prev';
+    prevBtn.setAttribute('aria-label', 'Previous option');
+    prevBtn.innerHTML = '&#8249;';
+    pairViewerEl.appendChild(prevBtn);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'carousel-nav-btn carousel-nav-next';
+    nextBtn.setAttribute('aria-label', 'Next option');
+    nextBtn.innerHTML = '&#8250;';
+    pairViewerEl.appendChild(nextBtn);
+
+    // "Your Pick" ribbon (overlaid inside the viewer)
+    const yourPickRibbon = document.createElement('div');
+    yourPickRibbon.id = 'carousel-your-pick';
+    yourPickRibbon.className = 'carousel-your-pick';
+    yourPickRibbon.textContent = '⭐ Your Pick';
+    pairViewerEl.appendChild(yourPickRibbon);
+
+    card.appendChild(pairViewerEl);
+
+    // Dot indicator row
+    const dotRow = document.createElement('div');
+    dotRow.className = 'carousel-dot-row';
+    const dots = pairsToShow.map((_, i) => {
+        const d = document.createElement('div');
+        d.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+        d.title = `Option ${i + 1}`;
+        d.addEventListener('click', () => goTo(i));
+        dotRow.appendChild(d);
+        return d;
+    });
+    card.appendChild(dotRow);
+
+    // Building ID label
+    const pairIdEl = document.createElement('div');
+    pairIdEl.className = 'viewer-building-id';
+    pairIdEl.id = 'carousel-pair-id';
+    pairIdEl.style.textAlign = 'center';
+    pairIdEl.textContent = 'Loading…';
+    card.appendChild(pairIdEl);
+
+    // Pick button
+    const pickBtn = document.createElement('button');
+    pickBtn.id = 'carousel-pick-btn';
+    pickBtn.className = 'pair-pick-btn';
+    pickBtn.textContent = 'Pick This Match';
+    pickBtn.disabled = true;
+    pickBtn.addEventListener('click', () => selectGuess(currentIdx));
+    card.appendChild(pickBtn);
+
+    // Result badge (shown after reveal)
+    const resultBadge = document.createElement('div');
+    resultBadge.id = 'carousel-result-badge';
+    resultBadge.className = 'carousel-result-badge';
+    card.appendChild(resultBadge);
+
+    if (pairsViewersEl) pairsViewersEl.appendChild(card);
+
+    // ── guess bar + reveal button (below both viewers) ───────────────────────
+    const classifierSection = document.getElementById('comparison-classifier-section');
+    if (classifierSection) {
+        classifierSection.style.display = 'flex';
+        classifierSection.innerHTML = '';
+
+        const guessBar = document.createElement('div');
+        guessBar.id = 'game-guess-bar';
+        guessBar.className = 'game-guess-bar';
+        guessBar.style.cssText = 'margin-bottom:0;';
+        guessBar.innerHTML = '<span style="color:#94a3b8;">Browse the options above, then pick your best match.</span>';
+        classifierSection.appendChild(guessBar);
+
+        const actRow = document.createElement('div');
+        actRow.style.cssText = 'display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;';
+
+        const revealBtn = document.createElement('button');
+        revealBtn.id = 'reveal-answer-btn';
+        revealBtn.className = 'reveal-answer-btn';
+        revealBtn.style.cssText = 'margin:0;';
+        revealBtn.textContent = "Reveal Model's Answer";
+        revealBtn.disabled = true;
+        revealBtn.addEventListener('click', () => {
+            const sp = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
+            showClassifierResultsInComparisonWindow(
+                comparisonWindow.getAttribute('data-candidate-id'), sp, userGuess
+            );
+        });
+        actRow.appendChild(revealBtn);
+
+        const skipLink = document.createElement('a');
+        skipLink.href = '#';
+        skipLink.style.cssText = 'font-size:11px;color:#94a3b8;text-decoration:underline;white-space:nowrap;';
+        skipLink.textContent = 'Skip — just show results';
+        skipLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            const sp = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
+            showClassifierResultsInComparisonWindow(
+                comparisonWindow.getAttribute('data-candidate-id'), sp, null
+            );
+        });
+        actRow.appendChild(skipLink);
+
+        classifierSection.appendChild(actRow);
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    function updateCarouselUI() {
+        counter.textContent = `Option ${currentIdx + 1} / ${n}`;
+        prevBtn.disabled = false;
+        nextBtn.disabled = false;
+        pairIdEl.textContent = pairsToShow[currentIdx]
+            ? `Index: ${pairsToShow[currentIdx].index_id}` : '';
+        // dots
+        dots.forEach((d, i) => {
+            d.classList.toggle('active', i === currentIdx);
+        });
+        // ribbon
+        yourPickRibbon.classList.toggle('visible', userGuess === currentIdx);
+        // pick button label
+        if (comparisonWindow.getAttribute('data-revealed') !== '1') {
+            pickBtn.textContent = userGuess === currentIdx ? '✓ Your Pick' : 'Pick This Match';
+            pickBtn.classList.toggle('selected', userGuess === currentIdx);
         }
-        return;
     }
-    
-    const pair = pairs[currentIndex];
-    const pairViewer = document.getElementById(`comparison-viewer-pair-${currentIndex}`);
-    const pairIdEl = document.getElementById(`comparison-pair-id-${currentIndex}`);
-    
-    if (!pairViewer || !pairIdEl) {
-        console.error(`Pair viewer elements not found for index ${currentIndex}`);
-        // Continue with next pair
-        setTimeout(() => loadPairsSequentially(pairs, currentIndex + 1, onAllComplete), 100);
-        return;
+
+    function goTo(idx) {
+        if (pairCityData.length === 0) return; // data not loaded yet
+        currentIdx = idx;
+        updateCarouselUI();
+        // Switch the building in the viewer (both before AND after reveal)
+        if (pairViewer && pairViewer.isInitialized && pairCityData[idx]) {
+            try { pairViewer.loadBuilding(pairCityData[idx].cityJSON); } catch (_) {}
+        }
+        // If already revealed, refresh the result styling for the new current option
+        if (comparisonWindow.getAttribute('data-revealed') === '1') {
+            applyRevealToCurrent();
+        }
     }
-    
-    console.log(`Loading pair ${currentIndex + 1}/${pairs.length}: ${pair.index_id}`);
-    
-    // Use unique viewerType for each pair to avoid conflicts and ensure proper cleanup
-    const viewerType = `pair-${currentIndex}`;
-    
-    // Find and load the building, then load next pair
-    // Each pair gets its own viewer instance with dark red color
-    findAndLoadBuilding(pair.index_id, pairViewer, pairIdEl, viewerType, () => {
-        // After this pair loads, load the next one
-        setTimeout(() => {
-            loadPairsSequentially(pairs, currentIndex + 1, onAllComplete);
-        }, 500); // Small delay between loads
+
+    const n = pairsToShow.length;
+    prevBtn.addEventListener('click', () => goTo((currentIdx - 1 + n) % n));
+    nextBtn.addEventListener('click', () => goTo((currentIdx + 1) % n));
+
+    function selectGuess(idx) {
+        if (comparisonWindow.getAttribute('data-revealed') === '1') return;
+        userGuess = idx;
+        // Update dot colors
+        dots.forEach((d, i) => d.classList.toggle('picked', i === idx));
+        updateCarouselUI();
+        // Update guess bar
+        const guessBar = document.getElementById('game-guess-bar');
+        if (guessBar) guessBar.innerHTML = `You picked: <span class="guess-text">Option ${idx + 1}</span> — ready?`;
+        const revealBtn = document.getElementById('reveal-answer-btn');
+        if (revealBtn) revealBtn.disabled = false;
+    }
+
+    // Called after reveal to paint the current carousel slot with the result
+    function applyRevealToCurrent() {
+        const sp = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
+        const pair = sp[currentIdx];
+        if (!pair) return;
+        const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
+        const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+        card.classList.remove('pair-result-true','pair-result-false-positive','pair-result-no-match','pair-selected');
+        resultBadge.className = 'carousel-result-badge visible';
+        if (pred === 1 && tl === 1) {
+            card.classList.add('pair-result-true');
+            resultBadge.classList.add('true-match');
+            resultBadge.textContent = '✓ True Match';
+        } else if (pred === 1 && tl === 0) {
+            card.classList.add('pair-result-false-positive');
+            resultBadge.classList.add('false-pos');
+            resultBadge.textContent = '⚠ False Positive';
+        } else if (tl === 1) {
+            card.classList.add('pair-result-true');
+            resultBadge.classList.add('true-match');
+            resultBadge.textContent = '✓ True Match (missed by model)';
+        } else {
+            card.classList.add('pair-result-no-match');
+            resultBadge.classList.add('no-match');
+            resultBadge.textContent = 'No Match';
+        }
+        // Update dots with result colors
+        sp.slice(0, 3).forEach((p, i) => {
+            const pr = p.prediction !== undefined ? p.prediction : (p.confidence > 0.5 ? 1 : 0);
+            const lt = p.true_label !== undefined && p.true_label !== null ? p.true_label : null;
+            dots[i].classList.remove('picked','result-true','result-fp','result-none');
+            if (pr === 1 && lt === 1) dots[i].classList.add('result-true');
+            else if (pr === 1 && lt === 0) dots[i].classList.add('result-fp');
+            else if (lt === 1) dots[i].classList.add('result-true');
+            else dots[i].classList.add('result-none');
+        });
+    }
+    // expose so showClassifierResultsInComparisonWindow can trigger the first paint
+    comparisonWindow._applyRevealToCurrent = applyRevealToCurrent;
+    comparisonWindow._goTo = goTo;
+
+    // ── parallel fetch + load ──────────────────────────────────────────────────
+    updateCarouselUI(); // show counters immediately (disabled state)
+    counter.textContent = `Loading… (0 / ${pairsToShow.length})`;
+
+    const allIds = [candidateBuildingId, ...pairsToShow.map(p => p.index_id)];
+
+    Promise.all(allIds.map(id =>
+        _fetchBuildingDataForComparison(id).catch(e => ({ error: e.message, buildingId: id }))
+    )).then(async (results) => {
+        // Store pair city data
+        pairCityData = results.slice(1).map(r => r.error ? null : r);
+
+        // Load candidate viewer first, then pair (stagger to avoid dual WebGL init issues)
+        const candResult = results[0];
+        if (!candResult.error && candidateViewerEl) {
+            await _loadCityJSONInViewer(candResult.buildingId, candResult.cityJSON, candidateViewerEl, 'candidate');
+        }
+
+        // Small pause between WebGL context creations
+        await new Promise(r => setTimeout(r, 80));
+
+        // Load pair carousel viewer (only ONE Three.js viewer for all pairs)
+        const firstPair = pairCityData.find(d => d !== null);
+        if (firstPair && pairViewerEl) {
+            pairViewer = await _loadCityJSONInViewer(firstPair.buildingId, firstPair.cityJSON, pairViewerEl, 'pair-carousel');
+            // Re-attach all overlay controls (innerHTML reset in _loadCityJSONInViewer wipes them)
+            pairViewerEl.style.position = 'relative';
+            pairViewerEl.appendChild(counter);
+            pairViewerEl.appendChild(prevBtn);
+            pairViewerEl.appendChild(nextBtn);
+            pairViewerEl.appendChild(yourPickRibbon);
+            pickBtn.disabled = false;
+        }
+        // Store pair cityJSON data so "Show Matches on Map" can use it for buildings not in the Cesium viewer
+        comparisonWindow._pairCityData = pairCityData;
+        // Store pairCityData on the window element so the "Show Matches on Map" button can access it
+        comparisonWindow._pairCityData = pairCityData;
+        updateCarouselUI();
     });
 }
 
@@ -2311,144 +2629,120 @@ function cleanupComparisonViewers() {
     });
 }
 
-// Show classifier results in comparison window
-function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs) {
-    console.log('Showing classifier results for building:', candidateBuildingId);
-    
+// Show classifier results — carousel version with user-guess comparison
+function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, userGuess) {
+    const pairsToShow = pairs.slice(0, 3);
+    const compWin = document.getElementById('bkafi-comparison-window');
+    if (compWin) compWin.setAttribute('data-revealed', '1');
+
+    // ── compute model & truth indices ─────────────────────────────────────────
+    let modelPickIdx = null;
+    let truMatchIdx  = null;
+    pairsToShow.forEach((pair, i) => {
+        const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
+        const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+        if (pred === 1 && modelPickIdx === null) modelPickIdx = i;
+        if (tl === 1 && truMatchIdx === null)  truMatchIdx = i;
+    });
+
+    // Disable the pick button now
+    const pickBtn = document.getElementById('carousel-pick-btn');
+    if (pickBtn) { pickBtn.disabled = true; pickBtn.textContent = 'Pick This Match'; }
+
+    // Apply result styling to the carousel card (for whatever is currently shown)
+    if (compWin && compWin._applyRevealToCurrent) compWin._applyRevealToCurrent();
+
+    // ── score banner + details below both viewers ─────────────────────────────
     const classifierSection = document.getElementById('comparison-classifier-section');
-    const classifierResults = document.getElementById('classifier-results');
-    const showClassifierBtn = document.getElementById('show-classifier-results-btn');
-    
-    if (!classifierSection || !classifierResults) {
-        console.error('Classifier section elements not found');
-        return;
+    if (!classifierSection) return;
+    classifierSection.style.display = 'flex';
+    classifierSection.innerHTML = '';
+
+    // Score banner
+    if (userGuess !== null) {
+        let bannerClass, bannerHtml;
+        if (truMatchIdx !== null) {
+            if (userGuess === truMatchIdx) {
+                bannerClass = 'correct';
+                bannerHtml = `🎉 Correct! Option ${userGuess + 1} is the true match.`;
+            } else {
+                bannerClass = 'incorrect';
+                bannerHtml = `The true match is Option ${truMatchIdx + 1}. You picked Option ${userGuess + 1}.`;
+            }
+        } else if (modelPickIdx !== null && userGuess === modelPickIdx) {
+            bannerClass = 'correct';
+            bannerHtml = `✓ You agreed with the model! Both picked Option ${userGuess + 1}.`;
+        } else if (modelPickIdx !== null) {
+            bannerClass = 'incorrect';
+            bannerHtml = `The model picked Option ${modelPickIdx + 1}. You picked Option ${userGuess + 1}.`;
+        } else {
+            bannerClass = 'no-pick';
+            bannerHtml = `The model found no match. You picked Option ${userGuess + 1}.`;
+        }
+        const banner = document.createElement('div');
+        banner.className = `game-score-banner ${bannerClass}`;
+        banner.innerHTML = bannerHtml;
+        classifierSection.appendChild(banner);
     }
-    
-    // Show the section (it's already visible, but ensure it's displayed)
-    classifierSection.style.display = 'block';
-    
-    // Update button text to indicate results are shown (but keep it enabled so user can see results again)
-    if (showClassifierBtn) {
-        showClassifierBtn.textContent = 'Classifier Results (shown)';
-        // Don't disable the button - allow user to scroll to results again if needed
-    }
-    
-    // Clear previous results
-    classifierResults.innerHTML = '';
-    
-    // Analyze pairs to determine summary message
-    let hasMatchPrediction = false;
-    let hasTrueMatch = false;
-    let hasFalsePositive = false;
-    
-    pairs.forEach((pair) => {
-        const prediction = pair.prediction !== undefined ? pair.prediction : null;
-        const trueLabel = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
-        
-        if (prediction === 1) {
-            hasMatchPrediction = true;
-            if (trueLabel === 1) {
-                hasTrueMatch = true;
-            } else if (trueLabel === 0) {
-                hasFalsePositive = true;
+
+    // Per-pair summary table
+    const table = document.createElement('div');
+    table.style.cssText = 'font-size:12px;width:100%;';
+
+    // Header row
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;padding:3px 2px 5px;border-bottom:2px solid #e2e8f0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;';
+    header.innerHTML = '<span>Option</span><span>Model Prediction</span><span>Confidence</span><span>True Label</span>';
+    table.appendChild(header);
+
+    pairsToShow.forEach((pair, i) => {
+        const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
+        const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+        const predColor = pred === 1 ? '#22c55e' : '#94a3b8';
+        const tlColor   = tl === 1 ? '#22c55e' : (tl === 0 ? '#f97316' : '#94a3b8');
+        const confPct   = pair.confidence !== undefined ? `${(pair.confidence * 100).toFixed(0)}%` : '—';
+        const isUserPick = userGuess === i ? ' ⭐' : '';
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #f0f0f0;cursor:pointer;';
+        row.innerHTML = `
+            <span style="font-weight:600;color:#555;">Opt ${i + 1}${isUserPick}</span>
+            <span>Model: <strong style="color:${predColor}">${pred === 1 ? 'Match' : 'No'}</strong></span>
+            <span>${confPct}</span>
+            <span>True: <strong style="color:${tlColor}">${tl === 1 ? 'Match' : tl === 0 ? 'No' : '—'}</strong></span>`;
+        // clicking a row navigates the carousel to that option
+        row.addEventListener('click', () => { if (compWin && compWin._goTo) compWin._goTo(i); });
+        row.addEventListener('mouseenter', () => row.style.background = '#f8fafc');
+        row.addEventListener('mouseleave', () => row.style.background = '');
+        table.appendChild(row);
+    });
+    classifierSection.appendChild(table);
+
+    // ── "Show Matches on Map" button ──────────────────────────────────────────
+    const backBtn = document.createElement('button');
+    backBtn.className = 'back-to-map-btn';
+    backBtn.innerHTML = '🗺 Show Matches on Map';
+    backBtn.addEventListener('click', () => {
+        // Place markers FIRST (before closing, so viewer is still accessible)
+        if (window.viewer && window.viewer.addBuildingMarkers) {
+            const pcd = compWin ? (compWin._pairCityData || []) : [];
+            window.viewer.addBuildingMarkers(candidateBuildingId, pairsToShow, pcd);
+        }
+        // Close comparison window and building properties without clearing the markers we just added
+        window._keepBuildingMarkers = true;
+        closeBkafiComparisonWindow();
+        window._keepBuildingMarkers = false;
+        closeBuildingProperties();
+        // Fly to candidate building so markers are visible
+        if (window.viewer) {
+            const candidateEntity = window.viewer.findEntityByBuildingId(candidateBuildingId);
+            if (candidateEntity) {
+                window.viewer.viewer.flyTo(candidateEntity, {
+                    offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-45), 300)
+                });
             }
         }
     });
-    
-    // Create results container
-    const resultsContainer = document.createElement('div');
-    resultsContainer.style.cssText = 'background: #f8f9fa; border-radius: 8px; padding: 15px;';
-    
-    // Add heading
-    const heading = document.createElement('h4');
-    heading.style.cssText = 'margin: 0 0 15px 0; color: #667eea; font-size: 16px;';
-    heading.textContent = 'Classifier Predictions & True Labels';
-    resultsContainer.appendChild(heading);
-    
-    // Add summary message
-    const summaryDiv = document.createElement('div');
-    summaryDiv.style.cssText = 'background: white; border: 2px solid #667eea; border-radius: 6px; padding: 12px; margin-bottom: 15px; font-weight: 600;';
-    
-    if (!hasMatchPrediction) {
-        summaryDiv.style.color = '#6c757d';
-        summaryDiv.textContent = 'No matches were found in the BKAFI pairs';
-    } else if (hasTrueMatch) {
-        summaryDiv.style.color = '#28a745';
-        summaryDiv.textContent = 'True match was found';
-    } else if (hasFalsePositive) {
-        summaryDiv.style.color = '#dc3545';
-        summaryDiv.textContent = 'False positive match was found';
-    } else {
-        summaryDiv.style.color = '#6c757d';
-        summaryDiv.textContent = 'Match predictions found (true labels unknown)';
-    }
-    
-    resultsContainer.appendChild(summaryDiv);
-    
-    // Add results for each pair
-    pairs.forEach((pair, index) => {
-        const pairResult = document.createElement('div');
-        pairResult.style.cssText = 'background: white; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-bottom: 10px;';
-        
-        const prediction = pair.prediction !== undefined ? pair.prediction : null;
-        const trueLabel = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
-        
-        // Determine colors based on values
-        const predictionColor = prediction === 1 ? '#28a745' : '#dc3545';
-        const predictionText = prediction === 1 ? 'Match' : 'No Match';
-        const trueLabelColor = trueLabel === 1 ? '#28a745' : (trueLabel === 0 ? '#dc3545' : '#6c757d');
-        const trueLabelText = trueLabel === 1 ? 'Match' : (trueLabel === 0 ? 'No Match' : 'Unknown');
-        
-        // Check if prediction matches true label
-        const isCorrect = prediction !== null && trueLabel !== null && prediction === trueLabel;
-        const correctnessBadge = isCorrect ? 
-            '<span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">✓ Correct</span>' :
-            (trueLabel !== null ? '<span style="background: #dc3545; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">✗ Incorrect</span>' : '');
-        
-        pairResult.innerHTML = `
-            <div style="margin-bottom: 8px;">
-                <strong style="color: #333;">Pair ${index + 1}</strong>
-                ${correctnessBadge}
-            </div>
-            <div style="font-size: 13px; color: #666; margin-bottom: 6px;">
-                <strong>Index Building ID:</strong> ${pair.index_id}
-            </div>
-            <div style="display: flex; gap: 15px; margin-top: 10px;">
-                <div style="flex: 1;">
-                    <div style="font-size: 12px; color: #999; margin-bottom: 4px;">Prediction</div>
-                    <div style="font-size: 14px; font-weight: 600; color: ${predictionColor};">
-                        ${predictionText}
-                    </div>
-                </div>
-                <div style="flex: 1;">
-                    <div style="font-size: 12px; color: #999; margin-bottom: 4px;">True Label</div>
-                    <div style="font-size: 14px; font-weight: 600; color: ${trueLabelColor};">
-                        ${trueLabelText}
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        resultsContainer.appendChild(pairResult);
-    });
-    
-    classifierResults.appendChild(resultsContainer);
-    
-    console.log('Classifier results displayed for', pairs.length, 'pairs');
-    
-    // Auto-scroll to show the classifier results after a short delay to ensure DOM is updated
-    setTimeout(() => {
-        const comparisonContent = document.querySelector('.comparison-content');
-        if (comparisonContent && classifierSection) {
-            // Scroll to the classifier section smoothly
-            classifierSection.scrollIntoView({ 
-                behavior: 'smooth', 
-                block: 'start',
-                inline: 'nearest'
-            });
-            console.log('Scrolled to classifier results');
-        }
-    }, 100);
+    classifierSection.appendChild(backBtn);
 }
 
 // Close BKAFI comparison window
@@ -2462,6 +2756,11 @@ function closeBkafiComparisonWindow() {
     
     if (overlay) {
         overlay.classList.remove('active');
+    }
+
+    // Remove map markers (skip if "Show Matches on Map" just placed them)
+    if (!window._keepBuildingMarkers && window.viewer && window.viewer.clearBuildingMarkers) {
+        window.viewer.clearBuildingMarkers();
     }
     
     // Clean up viewers when closing
@@ -2575,47 +2874,51 @@ function viewResults() {
         });
 }
 
-// Update pipeline UI with status indicators
+// Update pipeline UI with status indicators and step accent colors (orange = step 1, yellow = step 2 when relevant)
 function updatePipelineUI() {
-    // Update step 1
+    // Step 1: orange when current (not completed), green when completed
     const step1El = document.getElementById('step-1');
-    const step1Status = step1El.querySelector('.step-status');
-    if (pipelineState.step1Completed) {
-        step1Status.innerHTML = '✓';
-        step1Status.className = 'step-status completed';
-    } else {
-        step1Status.innerHTML = '';
-        step1Status.className = 'step-status';
-    }
-    
-    // Update step 2
-    const step2El = document.getElementById('step-2');
-    const step2Status = step2El.querySelector('.step-status');
-    if (pipelineState.step2Completed) {
-        step2Status.innerHTML = '✓';
-        step2Status.className = 'step-status completed';
-    } else {
-        step2Status.innerHTML = '';
-        step2Status.className = 'step-status';
-    }
-    
-    // Update step 3
-    const step3El = document.getElementById('step-3');
-    const step3Status = step3El.querySelector('.step-status');
-    const step3SummaryBtn = document.getElementById('step-btn-3-summary');
-    if (pipelineState.step3Completed) {
-        step3Status.innerHTML = '✓';
-        step3Status.className = 'step-status completed';
-        // Show summary button when step 3 is completed
-        if (step3SummaryBtn) {
-            step3SummaryBtn.style.display = 'block';
+    const step1Status = step1El ? step1El.querySelector('.step-status') : null;
+    if (step1El) {
+        step1El.classList.remove('step-current-orange', 'step-completed');
+        if (pipelineState.step1Completed) {
+            step1El.classList.add('step-completed');
+            if (step1Status) { step1Status.innerHTML = '✓'; step1Status.className = 'step-status completed'; }
+        } else {
+            step1El.classList.add('step-current-orange');
+            if (step1Status) { step1Status.innerHTML = ''; step1Status.className = 'step-status'; }
         }
-    } else {
-        step3Status.innerHTML = '';
-        step3Status.className = 'step-status';
-        // Hide summary button when step 3 is not completed
-        if (step3SummaryBtn) {
-            step3SummaryBtn.style.display = 'none';
+    }
+
+    // Step 2: yellow when current (step 1 done, step 2 not done), green when completed
+    const step2El = document.getElementById('step-2');
+    const step2Status = step2El ? step2El.querySelector('.step-status') : null;
+    if (step2El) {
+        step2El.classList.remove('step-current-yellow', 'step-completed');
+        if (pipelineState.step2Completed) {
+            step2El.classList.add('step-completed');
+            if (step2Status) { step2Status.innerHTML = '✓'; step2Status.className = 'step-status completed'; }
+        } else if (pipelineState.step1Completed) {
+            step2El.classList.add('step-current-yellow');
+            if (step2Status) { step2Status.innerHTML = ''; step2Status.className = 'step-status'; }
+        } else if (step2Status) {
+            step2Status.innerHTML = ''; step2Status.className = 'step-status';
+        }
+    }
+
+    // Step 3: default blue when current, green when completed
+    const step3El = document.getElementById('step-3');
+    const step3Status = step3El ? step3El.querySelector('.step-status') : null;
+    const step3SummaryBtn = document.getElementById('step-btn-3-summary');
+    if (step3El) {
+        step3El.classList.remove('step-completed');
+        if (pipelineState.step3Completed) {
+            step3El.classList.add('step-completed');
+            if (step3Status) { step3Status.innerHTML = '✓'; step3Status.className = 'step-status completed'; }
+            if (step3SummaryBtn) step3SummaryBtn.style.display = 'block';
+        } else {
+            if (step3Status) { step3Status.innerHTML = ''; step3Status.className = 'step-status'; }
+            if (step3SummaryBtn) step3SummaryBtn.style.display = 'none';
         }
     }
 }
@@ -2656,7 +2959,10 @@ function pollJobStatus(jobId, onSuccess, onError, options = {}) {
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'SUCCESS') {
-                    onSuccess(data.result);
+                    try { onSuccess(data.result); } catch (e) {
+                        console.error('pollJobStatus: onSuccess threw:', e);
+                        onError(e.message || 'Error processing job result');
+                    }
                     return;
                 }
                 if (data.status === 'FAILURE') {
@@ -2722,6 +3028,9 @@ function updateSelectedBuildingColor() {
         });
 }
 
+// Timeout for building status fetch (ms) — prevents spinner hanging if server is slow
+var BUILDING_STATUS_FETCH_TIMEOUT_MS = 30000;
+
 // Helper function to get building status (with caching)
 function getBuildingStatus(forceRefresh = false) {
     return new Promise((resolve, reject) => {
@@ -2736,18 +3045,29 @@ function getBuildingStatus(forceRefresh = false) {
             return;
         }
         
-        fetch(`/api/buildings/status?file=${encodeURIComponent(selectedFile)}`)
+        const url = `/api/buildings/status?file=${encodeURIComponent(selectedFile)}&_t=${Date.now()}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), BUILDING_STATUS_FETCH_TIMEOUT_MS);
+        
+        fetch(url, { signal: controller.signal, cache: 'no-store' })
             .then(response => response.json())
             .then(data => {
+                clearTimeout(timeoutId);
                 if (data.error) {
                     reject(new Error(data.error));
                     return;
                 }
-                // Cache the result
                 buildingStatusCache = data;
                 resolve(data);
             })
-            .catch(reject);
+            .catch(err => {
+                clearTimeout(timeoutId);
+                if (err.name === 'AbortError') {
+                    reject(new Error('Building status request timed out. Try again.'));
+                } else {
+                    reject(err);
+                }
+            });
     });
 }
 
@@ -2806,6 +3126,9 @@ function findBuildingStatus(viewerBuildingId, statusMap) {
     return null;
 }
 
+// Max time to wait for Stage 1 color update before still calling onComplete (ms)
+var STAGE1_COLOR_UPDATE_TIMEOUT_MS = 40000;
+
 // Update building colors based on pipeline stages
 function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) {
     // Stage 1: Geometric Featurization
@@ -2813,45 +3136,54 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
     if (!selectedFile || !window.viewer) {
         console.warn('Cannot update colors: no file selected or viewer not available');
         if (onComplete) onComplete();
-        return;
+        return Promise.resolve();
     }
     
-    const startTime = performance.now();
+    var startTime = performance.now();
+    var completed = false;
+    var done = function () {
+        if (completed) return;
+        completed = true;
+        if (onComplete) onComplete();
+    };
     
-    return getBuildingStatus(forceRefresh)
-        .then(data => {
-            const buildingColors = {};
-            // Pre-compute status map with all ID variations (optimized)
-            const { statusMap } = buildOptimizedStatusMap(data);
-            
-            // Update colors for ALL buildings in the viewer
+    var chain = getBuildingStatus(forceRefresh)
+        .then(function (data) {
+            var buildingColors = {};
+            var statusMap = buildOptimizedStatusMap(data).statusMap;
             if (window.viewer && window.viewer.buildingEntities) {
-                window.viewer.buildingEntities.forEach((entities, viewerBuildingId) => {
-                    const status = findBuildingStatus(viewerBuildingId, statusMap);
-                    if (status) {
-                        buildingColors[viewerBuildingId] = status.has_features ? 'orange' : 'blue';
-                    } else {
-                        buildingColors[viewerBuildingId] = 'blue'; // Default
-                    }
+                window.viewer.buildingEntities.forEach(function (entities, viewerBuildingId) {
+                    var status = findBuildingStatus(viewerBuildingId, statusMap);
+                    buildingColors[viewerBuildingId] = (status && status.has_features) ? 'orange' : 'blue';
                 });
             }
-            
             if (Object.keys(buildingColors).length > 0) {
-                // Wait for color updates to complete before calling onComplete
-                return window.viewer.updateBuildingColors(buildingColors).then(() => {
-                    const endTime = performance.now();
-                    console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 1) in ${(endTime - startTime).toFixed(2)}ms`);
-                    if (onComplete) onComplete();
+                return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(function () {
+                    console.log('Updated colors for ' + Object.keys(buildingColors).length + ' buildings (Stage 1) in ' + (performance.now() - startTime).toFixed(2) + 'ms');
+                    done();
                 });
-            } else {
-                if (onComplete) onComplete();
-                return Promise.resolve();
             }
+            done();
+            return Promise.resolve();
         })
-        .catch(error => {
+        .catch(function (error) {
             console.error('Error updating building colors for Stage 1:', error);
-            if (onComplete) onComplete();
+            done();
         });
+    
+    // Ensure onComplete is called even if getBuildingStatus or updateBuildingColors hangs
+    Promise.race([
+        chain,
+        new Promise(function (resolve) {
+            setTimeout(function () {
+                if (!completed) console.warn('Stage 1 color update: timeout after ' + STAGE1_COLOR_UPDATE_TIMEOUT_MS + 'ms');
+                done();
+                resolve();
+            }, STAGE1_COLOR_UPDATE_TIMEOUT_MS);
+        })
+    ]);
+    
+    return chain;
 }
 
 function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) {
@@ -2890,7 +3222,7 @@ function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) 
             
             if (Object.keys(buildingColors).length > 0) {
                 // Wait for color updates to complete before calling onComplete
-                return window.viewer.updateBuildingColors(buildingColors).then(() => {
+                return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(() => {
                     const endTime = performance.now();
                     console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 2) in ${(endTime - startTime).toFixed(2)}ms`);
                     
@@ -2959,7 +3291,7 @@ function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) 
             
             if (Object.keys(buildingColors).length > 0) {
                 // Wait for color updates to complete before calling onComplete
-                return window.viewer.updateBuildingColors(buildingColors).then(() => {
+                return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(() => {
                     const endTime = performance.now();
                     console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 3) in ${(endTime - startTime).toFixed(2)}ms`);
                     if (onComplete) onComplete();
@@ -3006,6 +3338,30 @@ function zoomInViewer() {
 function zoomOutViewer() {
     if (window.viewer && window.viewer.zoomOut) {
         window.viewer.zoomOut();
+    }
+}
+
+function rotateViewerLeft() {
+    if (window.viewer && window.viewer.rotateLeft) {
+        window.viewer.rotateLeft();
+    }
+}
+
+function rotateViewerRight() {
+    if (window.viewer && window.viewer.rotateRight) {
+        window.viewer.rotateRight();
+    }
+}
+
+function tiltViewerUp() {
+    if (window.viewer && window.viewer.tiltUp) {
+        window.viewer.tiltUp();
+    }
+}
+
+function tiltViewerDown() {
+    if (window.viewer && window.viewer.tiltDown) {
+        window.viewer.tiltDown();
     }
 }
 
@@ -3293,3 +3649,11 @@ window.closeBuildingProperties = closeBuildingProperties;
 window.updateViewerLegend = updateViewerLegend;
 window.setActiveFileFromViewer = setActiveFileFromViewer;
 window.zoomToLayer = zoomToLayer;
+
+// Called by the viewer after all queued layers have finished loading
+window.applyViewerLayerStyles = function () {
+    if (window.viewer && window.viewer.applyLayerVisualStyles) {
+        window.viewer.applyLayerVisualStyles(selectedFile);
+    }
+    updateViewerLegend();
+};

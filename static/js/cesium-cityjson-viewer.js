@@ -11,6 +11,40 @@ const BUILDING_COLOR_MAP = {
     'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255)      // Dark gray - no match
 };
 
+// Non-selected layer: semi-transparent fill + strong contour so overlapping buildings are distinguishable
+const INACTIVE_LAYER_FILL = Cesium.Color.fromBytes(180, 180, 180, 55);
+const INACTIVE_LAYER_OUTLINE = Cesium.Color.fromBytes(80, 80, 80, 220);
+const SELECTED_LAYER_OUTLINE = Cesium.Color.BLACK.withAlpha(0.5);
+
+// Pre-computed source material palettes — created once, never re-allocated per entity.
+// getMaterialForObjectType returns from these instead of calling fromBytes() each time.
+const _MAT = {
+    A: {
+        Building:             Cesium.Color.fromBytes(116, 151, 223, 255),
+        BuildingPart:         Cesium.Color.fromBytes(116, 151, 223, 255),
+        BuildingInstallation: Cesium.Color.fromBytes(116, 151, 223, 255),
+        Bridge:               Cesium.Color.fromBytes(153, 153, 153, 255),
+        BridgePart:           Cesium.Color.fromBytes(153, 153, 153, 255),
+        Road:                 Cesium.Color.fromBytes(153, 153, 153, 255),
+        WaterBody:            Cesium.Color.fromBytes( 77, 166, 255, 255),
+        PlantCover:           Cesium.Color.fromBytes( 57, 172,  57, 255),
+        LandUse:              Cesium.Color.fromBytes(255, 255, 179, 255),
+        _fallback:            Cesium.Color.fromBytes(136, 136, 136, 255),
+    },
+    B: {
+        Building:             Cesium.Color.fromBytes( 38, 166, 154, 255),
+        BuildingPart:         Cesium.Color.fromBytes( 38, 166, 154, 255),
+        BuildingInstallation: Cesium.Color.fromBytes( 38, 166, 154, 255),
+        Bridge:               Cesium.Color.fromBytes( 70, 130, 120, 255),
+        BridgePart:           Cesium.Color.fromBytes( 70, 130, 120, 255),
+        Road:                 Cesium.Color.fromBytes(153, 153, 153, 255),
+        WaterBody:            Cesium.Color.fromBytes( 77, 166, 255, 255),
+        PlantCover:           Cesium.Color.fromBytes( 57, 172,  57, 255),
+        LandUse:              Cesium.Color.fromBytes(255, 255, 179, 255),
+        _fallback:            Cesium.Color.fromBytes( 38, 166, 154, 255),
+    },
+};
+
 class CesiumCityJSONViewer {
     constructor(containerId, options = {}) {
         this.container = document.getElementById(containerId);
@@ -189,6 +223,11 @@ class CesiumCityJSONViewer {
             // Remove placeholder if exists
             this.clearPlaceholder();
             
+            // Add touch-friendly map control buttons (zoom, rotate, tilt, home) for non-comparison viewer
+            if (!this.isComparisonViewer && this.container) {
+                this._injectMapControls();
+            }
+            
             // For comparison viewers, disable globe rendering for better performance
             if (this.isComparisonViewer) {
                 this.viewer.scene.globe.show = false;
@@ -217,7 +256,17 @@ class CesiumCityJSONViewer {
                 // Building was clicked
                 const entity = pickedObject.id;
                 const buildingId = entity.buildingId;
-                
+                // Find all entities at this building (same ID from different layers/sources)
+                const allEntities = this._findEntitiesById(buildingId) || [];
+                const sources = [];
+                const seenPaths = new Set();
+                allEntities.forEach((e) => {
+                    if (!e.filePath || seenPaths.has(e.filePath)) return;
+                    seenPaths.add(e.filePath);
+                    const src = this.layerSource.get(e.filePath) || 'A';
+                    const shortName = e.filePath.split('/').pop() || e.filePath;
+                    sources.push({ filePath: e.filePath, source: src, name: shortName });
+                });
                 const cityObjects = entity.filePath
                     ? (this.cityObjectsByFile.get(entity.filePath) || {})
                     : this.cityObjects;
@@ -225,7 +274,7 @@ class CesiumCityJSONViewer {
                     if (entity.filePath && typeof window.setActiveFileFromViewer === 'function') {
                         window.setActiveFileFromViewer(entity.filePath);
                     }
-                    this.onBuildingClicked(buildingId, entity, cityObjects[buildingId]);
+                    this.onBuildingClicked(buildingId, entity, cityObjects[buildingId], { sources });
                 }
             } else {
                 // Clicked on nothing - close info box
@@ -245,14 +294,13 @@ class CesiumCityJSONViewer {
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     }
     
-    onBuildingClicked(buildingId, entity, cityObjectOverride) {
+    onBuildingClicked(buildingId, entity, cityObjectOverride, options = {}) {
         const cityObject = cityObjectOverride || this.cityObjects[buildingId];
         
         // Select the entity (for highlighting)
         this.viewer.selectedEntity = entity;
         
         // Store the current material as the "original" (this will be the correct color after updates)
-        // This ensures that when highlight resets, it uses the latest color, not an old one
         if (!entity.originalMaterial) {
             entity.originalMaterial = entity.polygon.material;
         }
@@ -260,17 +308,16 @@ class CesiumCityJSONViewer {
         // Highlight the building temporarily
         entity.polygon.material = Cesium.Color.YELLOW.withAlpha(0.7);
         
-        // Reset highlight after 2 seconds - use the stored original material
+        // Reset highlight after 2 seconds
         setTimeout(() => {
             if (entity.polygon) {
-                // Use the stored originalMaterial if available, otherwise use current material
                 entity.polygon.material = entity.originalMaterial || entity.polygon.material;
             }
         }, 2000);
         
-        // Show custom building properties window instead of Cesium info box
+        // Show custom building properties window; pass sources when building exists in multiple layers
         if (window.showBuildingProperties) {
-            window.showBuildingProperties(buildingId, cityObject);
+            window.showBuildingProperties(buildingId, cityObject, options);
         }
     }
     
@@ -357,7 +404,161 @@ class CesiumCityJSONViewer {
             });
     }
     
+    /**
+     * Fast loader for pre-baked CityJSON files (*.prebaked.json).
+     * Positions are already WGS84; no proj4, no transform math needed.
+     * @private
+     */
+    _parsePrebaked(data) {
+        const t0 = performance.now();
+        const buildings = data.buildings || {};
+        const ids = Object.keys(buildings);
+        const total = ids.length;
+
+        if (total === 0) {
+            this.hideLoading();
+            return;
+        }
+
+        // Build a CityObjects-compatible lookup so the click handler can find
+        // building data by ID (same structure the original parseCityJSON creates).
+        const cityObjectsMap = {};
+        for (const id of ids) {
+            const b = buildings[id];
+            cityObjectsMap[id] = { type: b.type || 'Building', attributes: b.attributes || {} };
+        }
+        this.cityObjects = cityObjectsMap;
+        if (this.currentLayerFilePath) {
+            this.cityObjectsByFile.set(this.currentLayerFilePath, cityObjectsMap);
+        }
+
+        // Compute geographic bounds while creating entities so fitCameraToBuildings works.
+        let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+
+        // Track whether we need to init the geographic bounds object.
+        if (!this.geographicBounds) {
+            this.geographicBounds = {
+                minLat: Infinity, maxLat: -Infinity,
+                minLon: Infinity, maxLon: -Infinity,
+            };
+        }
+
+        const createEntity = (id, bld) => {
+            const positions = bld.positions; // [[lon,lat], ...]
+            const height    = bld.height;
+
+            if (!positions || positions.length < 3 || height <= 0) return;
+
+            const cartesians = positions.map(([lon, lat]) => {
+                if (lon < minLon) minLon = lon;
+                if (lon > maxLon) maxLon = lon;
+                if (lat < minLat) minLat = lat;
+                if (lat > maxLat) maxLat = lat;
+                // Altitude in the Cartesian3 is overridden by polygon.height below;
+                // pass 0 to avoid any floating-point noise.
+                return Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+            });
+
+            const defaultColor = this.getMaterialForObjectType(
+                bld.type || 'Building', this.currentLayerSource);
+
+            const entity = this.viewer.entities.add({
+                name: bld.attributes?.name || id,
+                buildingId: id,
+                filePath: this.currentLayerFilePath,
+                cityObjectData: { type: bld.type, attributes: bld.attributes },
+                defaultColor,  // cached for reliable restore in applyLayerVisualStyles
+                polygon: {
+                    hierarchy: cartesians,
+                    extrudedHeight: height,
+                    height: 0,
+                    material: new Cesium.ColorMaterialProperty(defaultColor),
+                    outline: true,
+                    outlineColor: Cesium.Color.BLACK.withAlpha(0.3),
+                    outlineWidth: 1,
+                },
+            });
+
+            if (!this.buildingEntities.has(id)) {
+                this.buildingEntities.set(id, []);
+                this._updateIdMapping(id);
+            }
+            this.buildingEntities.get(id).push(entity);
+
+            if (this.currentLayerFilePath) {
+                if (!this.layerEntities.has(this.currentLayerFilePath)) {
+                    this.layerEntities.set(this.currentLayerFilePath, []);
+                }
+                this.layerEntities.get(this.currentLayerFilePath).push(entity);
+                if (this.currentLayerSource) {
+                    this.layerSource.set(this.currentLayerFilePath, this.currentLayerSource);
+                }
+            }
+        };
+
+        // Batch processing — same pattern as parseCityJSON so the UI stays responsive.
+        const batchSize = Math.min(500, Math.max(100, Math.floor(total / 10)));
+        let entityCount = 0;
+        let processed   = 0;
+
+        this.updateLoadingProgress(`Processing ${total} buildings…`);
+
+        const processBatch = (start) => {
+            const end = Math.min(start + batchSize, total);
+            for (let i = start; i < end; i++) {
+                const id  = ids[i];
+                const bld = buildings[id];
+                const before = this.viewer.entities.values.length;
+                createEntity(id, bld);
+                if (this.viewer.entities.values.length > before) entityCount++;
+            }
+            processed = end;
+
+            const pct = Math.round((processed / total) * 100);
+            this.updateLoadingProgress(`Processing buildings… ${pct}% (${processed}/${total})`);
+
+            if (end < total) {
+                setTimeout(() => processBatch(end), 0);
+            } else {
+                // Merge computed bounds into the shared geographicBounds tracker.
+                if (minLon !== Infinity) {
+                    this.geographicBounds.minLon = Math.min(this.geographicBounds.minLon, minLon);
+                    this.geographicBounds.maxLon = Math.max(this.geographicBounds.maxLon, maxLon);
+                    this.geographicBounds.minLat = Math.min(this.geographicBounds.minLat, minLat);
+                    this.geographicBounds.maxLat = Math.max(this.geographicBounds.maxLat, maxLat);
+                }
+
+                const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+                console.log(`Pre-baked: loaded ${entityCount}/${total} entities in ${elapsed}s`);
+
+                if (entityCount > 0 && !this.skipAutoFit) {
+                    this.fitCameraToBuildings();
+                }
+                if (!this.isComparisonViewer) {
+                    setTimeout(() => {
+                        this.hideLoading();
+                        const loadedFilePath = this.currentLayerFilePath;
+                        const loadedSource = this.layerSource.get(loadedFilePath) || 'A';
+                        if (typeof window.setActiveFileFromViewer === 'function' &&
+                                loadedFilePath && loadedSource === 'A') {
+                            window.setActiveFileFromViewer(loadedFilePath);
+                        }
+                    }, 500);
+                }
+            }
+        };
+
+        processBatch(0);
+    }
+
     parseCityJSON(cityJSON) {
+        // Fast path: pre-baked format has WGS84 footprints + heights pre-computed.
+        // Skip all coordinate transforms, vertex loops, and proj4 calls.
+        if (cityJSON.prebaked) {
+            this._parsePrebaked(cityJSON);
+            return;
+        }
+
         const parseStartTime = performance.now();
         try {
             // Store city objects
@@ -479,14 +680,11 @@ class CesiumCityJSONViewer {
             
             this.updateLoadingProgress(`Processing ${totalObjects} city objects...`);
             
-            // Use requestIdleCallback if available, otherwise fall back to setTimeout
-            const scheduleNextBatch = (callback) => {
-                if (window.requestIdleCallback) {
-                    window.requestIdleCallback(callback, { timeout: 100 });
-                } else {
-                    setTimeout(callback, 0);
-                }
-            };
+            // Yield the main thread between batches so the browser can paint,
+            // but resume immediately (next task queue slot, typically < 4 ms).
+            // requestIdleCallback deliberately defers until idle time which adds
+            // up to 100 ms of dead-wait per batch — avoid it here.
+            const scheduleNextBatch = (callback) => setTimeout(callback, 0);
             
             const processBatch = (startIndex) => {
                 const endIndex = Math.min(startIndex + batchSize, totalObjects);
@@ -540,6 +738,17 @@ class CesiumCityJSONViewer {
                     if (!this.isComparisonViewer) {
                         setTimeout(() => {
                             this.hideLoading();
+                            // Notify demo.js that all entities are ready so it can re-apply the
+                            // current pipeline color scheme (handles the race where pipeline steps
+                            // complete before batch entity creation finishes).
+                            // Only do this for Source A files to avoid overriding selectedFile
+                            // with a Source B path which would break the pipeline.
+                            const loadedFilePath = this.currentLayerFilePath;
+                            const loadedSource = this.layerSource.get(loadedFilePath) || 'A';
+                            if (typeof window.setActiveFileFromViewer === 'function' &&
+                                    loadedFilePath && loadedSource === 'A') {
+                                window.setActiveFileFromViewer(loadedFilePath);
+                            }
                         }, 500);
                     }
                 }
@@ -745,50 +954,47 @@ class CesiumCityJSONViewer {
     
     createBuildingEntity(objectId, cityObject, geometry, vertices, transform) {
         try {
-            // If vertices are already transformed, transform is null
-            // Otherwise, use the provided transform
+            // Single vertex pass: compute footprint positions + height in one sweep.
+            // (Previously calculateBuildingBoundingBox + convertGeometryToPositions ran separately,
+            //  each iterating all vertices plus proj4 per vertex in the second pass.)
             const useTransform = transform !== null;
-            
-            // Calculate building's own bounding box from its geometry
-            const buildingBbox = this.calculateBuildingBoundingBox(geometry, vertices, useTransform ? transform : null);
-            
-            if (!buildingBbox) {
-                console.warn(`Skipping entity ${objectId}: could not calculate bounding box`);
+            const processed = this._processBuilding(geometry, vertices, useTransform ? transform : null);
+
+            if (!processed) {
+                console.warn(`Skipping entity ${objectId}: could not process geometry`);
                 return null;
             }
-            
-            // Convert CityJSON geometry to Cesium positions (footprint at ground level)
-            const positions = this.convertGeometryToPositions(geometry, vertices, useTransform ? transform : null, buildingBbox.min.z);
-            
+
+            const { positions, height } = processed;
+
             if (!positions || positions.length < 3) {
-                console.warn(`Skipping entity ${objectId}: insufficient positions (got ${positions ? positions.length : 0})`);
+                console.warn(`Skipping entity ${objectId}: insufficient positions (${positions ? positions.length : 0})`);
                 return null;
             }
-            
-            // Get building height from its own bounding box
-            const height = buildingBbox.max.z - buildingBbox.min.z;
-            
             if (height <= 0) {
                 console.warn(`Skipping entity ${objectId}: invalid height ${height}`);
                 return null;
             }
             
             // Create Cesium entity
-            // Let Cesium auto-generate unique IDs to avoid duplicate ID errors
+            // Let Cesium auto-generate unique IDs to avoid duplicate ID errors.
+            // description is generated lazily on click — no HTML string creation per building at load time.
+            const defaultColor = this.getMaterialForObjectType(cityObject.type, this.currentLayerSource);
             const entity = this.viewer.entities.add({
                 name: cityObject.attributes?.name || objectId,
                 buildingId: objectId,
                 filePath: this.currentLayerFilePath,
+                cityObjectData: cityObject,
+                defaultColor,  // cached for reliable restore in applyLayerVisualStyles
                 polygon: {
                     hierarchy: positions,
                     extrudedHeight: height,
-                    height: 0, // Base at ground level
-                    material: this.getMaterialForObjectType(cityObject.type, this.currentLayerSource),
+                    height: 0,
+                    material: new Cesium.ColorMaterialProperty(defaultColor),
                     outline: true,
                     outlineColor: Cesium.Color.BLACK.withAlpha(0.3),
                     outlineWidth: 1
-                },
-                description: this.createBuildingDescription(cityObject)
+                }
             });
             
             // Store entity for click handling
@@ -809,7 +1015,6 @@ class CesiumCityJSONViewer {
                 }
             }
             
-            console.log(`Successfully created entity for ${objectId}, height: ${height.toFixed(2)}m, positions: ${positions.length}`);
             return entity;
         } catch (error) {
             console.error(`Error in createBuildingEntity for ${objectId}:`, error);
@@ -818,6 +1023,83 @@ class CesiumCityJSONViewer {
         }
     }
     
+    /**
+     * Single-pass geometry processor: collects footprint WGS84 positions AND
+     * computes minZ/maxZ in one vertex traversal instead of two separate passes.
+     * Returns { positions: Cartesian3[], height: number } or null on failure.
+     * @private
+     */
+    _processBuilding(geometry, vertices, transform) {
+        try {
+            let footprintRing = null;
+
+            if (geometry.type === 'Solid' && geometry.boundaries) {
+                const outerShell = geometry.boundaries[0];
+                if (outerShell && outerShell.length > 0 && outerShell[0] && outerShell[0].length > 0) {
+                    footprintRing = outerShell[0][0]; // first face, first ring
+                }
+            } else if (geometry.type === 'MultiSurface' && geometry.boundaries && geometry.boundaries.length > 0) {
+                const first = geometry.boundaries[0];
+                if (first && first.length > 0) footprintRing = first[0];
+            }
+
+            if (!footprintRing || footprintRing.length === 0) return null;
+
+            // Pass 1 of 1: iterate footprint vertices to build WGS84 positions
+            // AND track Z min/max across the footprint ring.
+            let minZ = Infinity, maxZ = -Infinity;
+            const positions = [];
+            const n = vertices.length;
+
+            for (let i = 0; i < footprintRing.length; i++) {
+                const idx = footprintRing[i];
+                if (idx < 0 || idx >= n) continue;
+                const v = vertices[idx];
+                let x = v[0], y = v[1], z = v[2];
+                if (transform) {
+                    x = x * transform.scale[0] + transform.translate[0];
+                    y = y * transform.scale[1] + transform.translate[1];
+                    z = z * transform.scale[2] + transform.translate[2];
+                }
+                if (z < minZ) minZ = z;
+                if (z > maxZ) maxZ = z;
+                const coords = this.transformToWGS84(x, y);
+                positions.push(Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat, minZ));
+            }
+
+            if (positions.length < 3 || minZ === Infinity) return null;
+
+            // For Solid geometries we also need the real maxZ across all faces to get a
+            // correct building height — iterate the remaining vertices (Z only, no proj4).
+            if (geometry.type === 'Solid' && geometry.boundaries) {
+                const outerShell = geometry.boundaries[0];
+                outerShell.forEach(face => {
+                    face.forEach(ring => {
+                        ring.forEach(idx => {
+                            if (idx < 0 || idx >= n) return;
+                            const v = vertices[idx];
+                            let z = v[2];
+                            if (transform) z = z * transform.scale[2] + transform.translate[2];
+                            if (z < minZ) minZ = z;
+                            if (z > maxZ) maxZ = z;
+                        });
+                    });
+                });
+            }
+
+            // Re-set the base height of all positions now that we know the true minZ
+            for (let i = 0; i < positions.length; i++) {
+                const cart = Cesium.Cartographic.fromCartesian(positions[i]);
+                positions[i] = Cesium.Cartesian3.fromRadians(cart.longitude, cart.latitude, minZ);
+            }
+
+            return { positions, height: maxZ - minZ };
+        } catch (err) {
+            console.error('_processBuilding error:', err);
+            return null;
+        }
+    }
+
     calculateBuildingBoundingBox(geometry, vertices, transform) {
         // Calculate bounding box for this specific building's geometry
         let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -967,34 +1249,9 @@ class CesiumCityJSONViewer {
     }
     
     getMaterialForObjectType(objectType, source) {
-        // Source A (Candidates) → blue  (rgb 116,151,223)
-        // Source B (Index)      → teal  (rgb  38,166,154) — distinct from all pipeline colours
-        const isSourceB = source === 'B';
-        const colors = isSourceB ? {
-            'Building':             Cesium.Color.fromBytes( 38, 166, 154, 255), // teal
-            'BuildingPart':         Cesium.Color.fromBytes( 38, 166, 154, 255),
-            'BuildingInstallation': Cesium.Color.fromBytes( 38, 166, 154, 255),
-            'Bridge':               Cesium.Color.fromBytes( 70, 130, 120, 255),
-            'BridgePart':           Cesium.Color.fromBytes( 70, 130, 120, 255),
-            'Road':                 Cesium.Color.fromBytes(153, 153, 153, 255),
-            'WaterBody':            Cesium.Color.fromBytes( 77, 166, 255, 255),
-            'PlantCover':           Cesium.Color.fromBytes( 57, 172,  57, 255),
-            'LandUse':              Cesium.Color.fromBytes(255, 255, 179, 255)
-        } : {
-            'Building':             Cesium.Color.fromBytes(116, 151, 223, 255), // blue
-            'BuildingPart':         Cesium.Color.fromBytes(116, 151, 223, 255),
-            'BuildingInstallation': Cesium.Color.fromBytes(116, 151, 223, 255),
-            'Bridge':               Cesium.Color.fromBytes(153, 153, 153, 255),
-            'BridgePart':           Cesium.Color.fromBytes(153, 153, 153, 255),
-            'Road':                 Cesium.Color.fromBytes(153, 153, 153, 255),
-            'WaterBody':            Cesium.Color.fromBytes( 77, 166, 255, 255),
-            'PlantCover':           Cesium.Color.fromBytes( 57, 172,  57, 255),
-            'LandUse':              Cesium.Color.fromBytes(255, 255, 179, 255)
-        };
-        const fallback = isSourceB
-            ? Cesium.Color.fromBytes(38, 166, 154, 255)
-            : Cesium.Color.fromBytes(136, 136, 136, 255);
-        return colors[objectType] || fallback;
+        // Returns a pre-computed, shared Color constant — no allocation on each call.
+        const palette = _MAT[source === 'B' ? 'B' : 'A'];
+        return palette[objectType] || palette._fallback;
     }
     
     /**
@@ -1061,9 +1318,7 @@ class CesiumCityJSONViewer {
         if (entities && entities.length > 0) {
             entities.forEach(entity => {
                 if (entity.polygon) {
-                    // Always update the originalMaterial reference to the new color
                     entity.originalMaterial = newColor;
-                    // Update the current material
                     entity.polygon.material = newColor;
                 }
             });
@@ -1074,55 +1329,85 @@ class CesiumCityJSONViewer {
     }
     
     /**
-     * Update colors for multiple buildings at once (optimized batch update)
+     * Update colors for multiple buildings at once.
+     * When selectedFilePath is set and multiple layers exist, only the selected layer gets full fill colors;
+     * other layers use a semi-transparent fill + distinct outline (contour) so overlapping buildings are visible.
      * @param {Object} buildingColors - Map of buildingId -> colorName
+     * @param {string} [selectedFilePath] - If set and layer is loaded, apply status colors only to this layer; others get outline style
      * @returns {Promise} Resolves when all color updates are complete
      */
-    updateBuildingColors(buildingColors) {
+    updateBuildingColors(buildingColors, selectedFilePath) {
         return new Promise((resolve) => {
-            const totalBuildings = Object.keys(buildingColors).length;
-            if (totalBuildings === 0) {
-                resolve();
-                return;
-            }
-            
-            const updates = [];
-            
-            // Collect all updates
-            Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
-                const newColor = BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'];
-                const entities = this._findEntitiesById(buildingId);
-                if (entities && entities.length > 0) {
-                    updates.push({ entities, color: newColor });
-                }
-            });
-            
-            if (updates.length === 0) {
-                resolve();
-                return;
-            }
-            
-            // Update all materials synchronously - material updates are fast
-            // No need for batching since we're just setting properties
+            const hasMultipleLayers = this.layerEntities.size > 1;
+            const useLayerSelection = selectedFilePath && hasMultipleLayers && this.layerEntities.has(selectedFilePath);
+            const defaultColorForSelected = useLayerSelection
+                ? this.getMaterialForObjectType('Building', this.layerSource.get(selectedFilePath))
+                : BUILDING_COLOR_MAP['blue'];
             const updateStartTime = performance.now();
-            updates.forEach(({ entities, color }) => {
-                entities.forEach(entity => {
-                    if (entity.polygon) {
-                        entity.originalMaterial = color;
-                        entity.polygon.material = color;
+
+            // Helper: apply color to a single entity. Outline properties are only
+            // written once (they never change between pipeline stages).
+            const applyColor = (entity, color, outlineColor, outlineWidth) => {
+                if (!entity.polygon) return;
+                entity.originalMaterial = color;
+                entity.polygon.material = color;
+                if (!entity._outlineApplied) {
+                    entity.polygon.outline = true;
+                    entity.polygon.outlineColor = outlineColor;
+                    entity.polygon.outlineWidth = outlineWidth;
+                    entity._outlineApplied = true;
+                }
+            };
+
+            if (useLayerSelection) {
+                // Apply pipeline colors only to the selected layer. Other layers keep their
+                // current colors — auto-dimming is removed; only the ◑ button dims layers.
+                this.layerEntities.forEach((entities, filePath) => {
+                    if (filePath !== selectedFilePath) return;
+                    entities.forEach(entity => {
+                        if (!entity.polygon) return;
+                        const colorName = buildingColors[entity.buildingId];
+                        const color = colorName
+                            ? (BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'])
+                            : defaultColorForSelected;
+                        applyColor(entity, color, SELECTED_LAYER_OUTLINE, 1.5);
+                    });
+                });
+            } else {
+                const totalBuildings = Object.keys(buildingColors).length;
+                if (totalBuildings === 0) {
+                    resolve();
+                    return;
+                }
+                const updates = [];
+                Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
+                    const newColor = BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'];
+                    const entities = this._findEntitiesById(buildingId);
+                    if (entities && entities.length > 0) {
+                        updates.push({ entities, color: newColor });
                     }
                 });
-            });
+                if (updates.length === 0) {
+                    resolve();
+                    return;
+                }
+                updates.forEach(({ entities, color }) => {
+                    entities.forEach(entity => {
+                        applyColor(entity, color, SELECTED_LAYER_OUTLINE, 1.5);
+                    });
+                });
+            }
             
             // Force Cesium to render immediately
             if (this.viewer && this.viewer.scene) {
                 this.viewer.scene.requestRender();
                 
-                // Wait for Cesium's postRender event to know when rendering is complete
+                // Wait for Cesium's postRender event to know when rendering is complete.
+                // One render cycle is sufficient to confirm the GPU has the new material data.
                 let renderCount = 0;
                 let resolved = false;
-                const maxRenders = 3; // Wait for 3 render cycles to ensure colors are visible
-                const maxWaitTime = 500; // Maximum 500ms wait as backup
+                const maxRenders = 1;    // was 3 — one frame is enough
+                const maxWaitTime = 150; // was 500 ms
                 
                 const resolveOnce = () => {
                     if (!resolved) {
@@ -1276,6 +1561,35 @@ class CesiumCityJSONViewer {
         }
     }
 
+    /** Inject zoom/rotate/tilt/home buttons for touch-friendly map control */
+    _injectMapControls() {
+        if (this.container.querySelector('#viewer-map-controls')) return;
+        const wrap = document.createElement('div');
+        wrap.id = 'viewer-map-controls';
+        wrap.className = 'viewer-map-controls';
+        wrap.setAttribute('aria-label', 'Map controls');
+        const buttons = [
+            { fn: 'zoomInViewer', title: 'Zoom in', label: 'Zoom in', sym: '+', cls: '' },
+            { fn: 'zoomOutViewer', title: 'Zoom out', label: 'Zoom out', sym: '−', cls: '' },
+            { fn: 'rotateViewerLeft', title: 'Rotate left', label: 'Rotate left', sym: '↶', cls: '' },
+            { fn: 'rotateViewerRight', title: 'Rotate right', label: 'Rotate right', sym: '↷', cls: '' },
+            { fn: 'tiltViewerUp', title: 'Tilt up (top-down)', label: 'Tilt up', sym: '⌃', cls: '' },
+            { fn: 'tiltViewerDown', title: 'Tilt down (horizon)', label: 'Tilt down', sym: '⌄', cls: '' },
+            { fn: 'resetViewerCamera', title: 'Reset view', label: 'Reset view', sym: '⌂', cls: 'viewer-map-control-btn-home' }
+        ];
+        buttons.forEach(({ fn, title, label, sym, cls }) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'viewer-map-control-btn' + (cls ? ' ' + cls : '');
+            btn.title = title;
+            btn.setAttribute('aria-label', label);
+            btn.textContent = sym;
+            btn.addEventListener('click', () => { if (typeof window[fn] === 'function') window[fn](); });
+            wrap.appendChild(btn);
+        });
+        this.container.appendChild(wrap);
+    }
+
     removeLayer(filePath) {
         if (!filePath || !this.viewer) {
             return;
@@ -1348,9 +1662,252 @@ class CesiumCityJSONViewer {
         if (this.pendingLoads.length > 0) {
             const nextLoad = this.pendingLoads.shift();
             setTimeout(() => this.loadCityJSON(nextLoad.filePath, nextLoad.options), 0);
+        } else {
+            // All queued layers have finished loading — refresh visual styles
+            if (typeof window.applyViewerLayerStyles === 'function') {
+                window.applyViewerLayerStyles();
+            }
         }
     }
+
+    /**
+     * Apply fill/outline visual styles based on how many layers are loaded.
+     * - Single layer: full opaque fill + subtle outline (normal view).
+     * - Multiple layers: selected layer → full fill + black outline;
+     *                    other layers → semi-transparent fill + dark outline (contour-only look).
+     * Call this whenever layers are added/removed or the active selection changes.
+     * @param {string} [selectedFilePath]
+     */
+    applyLayerVisualStyles(selectedFilePath) {
+        if (!this.viewer) return;
+
+        this.layerEntities.forEach((entities, filePath) => {
+            const uiState = (window.layerState && window.layerState[filePath]) || {};
+            const isDimmed = !!uiState.dimmed;
+
+            // A layer is inactive only when the user has explicitly dimmed it via the ◑ button.
+            // There is no auto-dimming of non-selected layers.
+            const isActive = !isDimmed;
+
+            entities.forEach(entity => {
+                if (!entity.polygon) return;
+                if (isActive) {
+                    // Restore the entity's default color.
+                    // Priority: pipeline-applied color (originalMaterial) → per-entity cached default → source palette.
+                    // Always wrap in a NEW ColorMaterialProperty so Cesium never skips the update
+                    // due to same-reference optimisation on shared _MAT constants.
+                    const color = entity.originalMaterial instanceof Cesium.Color
+                        ? entity.originalMaterial
+                        : (entity.defaultColor
+                            || this.getMaterialForObjectType('Building', this.layerSource.get(filePath)));
+                    entity.polygon.material = new Cesium.ColorMaterialProperty(color);
+                    entity.polygon.outline = true;
+                    entity.polygon.outlineColor = SELECTED_LAYER_OUTLINE;
+                } else {
+                    entity.polygon.material = new Cesium.ColorMaterialProperty(INACTIVE_LAYER_FILL);
+                    entity.polygon.outline = true;
+                    entity.polygon.outlineColor = INACTIVE_LAYER_OUTLINE;
+                }
+            });
+        });
+
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
+    /**
+     * Show or hide all entities in a layer without removing them from the viewer.
+     * Used by the legend eye-toggle so layers can be hidden without a full reload.
+     */
+    setLayerEntityShow(filePath, show) {
+        const entities = this.layerEntities.get(filePath);
+        if (!entities) return;
+        entities.forEach(entity => { entity.show = show; });
+        if (this.viewer && this.viewer.scene) this.viewer.scene.requestRender();
+    }
     
+    // ── Building markers (candidate / match / false-positive overlays) ─────────
+
+    _getEntityCentroid(entity) {
+        if (!entity.polygon || !entity.polygon.hierarchy) return null;
+        try {
+            const hier = entity.polygon.hierarchy.getValue(Cesium.JulianDate.now());
+            if (!hier || !hier.positions || hier.positions.length === 0) return null;
+            let x = 0, y = 0, z = 0;
+            hier.positions.forEach(p => { x += p.x; y += p.y; z += p.z; });
+            const n = hier.positions.length;
+            const centroid = new Cesium.Cartesian3(x / n, y / n, z / n);
+            const cart = Cesium.Cartographic.fromCartesian(centroid);
+            return Cesium.Cartesian3.fromRadians(cart.longitude, cart.latitude, cart.height + 30);
+        } catch (_) { return null; }
+    }
+
+    /**
+     * Compute a WGS84 position from a raw CityJSON object (for buildings not in the Cesium viewer).
+     */
+    _getCentroidFromCityJSON(cityJSON) {
+        if (!cityJSON) return null;
+        try {
+            const vertices   = cityJSON.vertices || [];
+            const transform  = cityJSON.transform || null;
+            const cityObjs   = cityJSON.CityObjects || {};
+            const objectId   = Object.keys(cityObjs)[0];
+            if (!objectId) return null;
+            const geoms = cityObjs[objectId].geometry || [];
+            if (geoms.length === 0) return null;
+
+            // Apply CityJSON transform (scale + translate)
+            const realVerts = transform
+                ? vertices.map(v => [
+                    v[0] * transform.scale[0] + transform.translate[0],
+                    v[1] * transform.scale[1] + transform.translate[1],
+                    v[2] * transform.scale[2] + transform.translate[2]
+                  ])
+                : vertices;
+
+            // Collect all unique vertex indices from the first geometry
+            const indices = new Set();
+            const collect = (b) => {
+                if (typeof b === 'number') indices.add(b);
+                else if (Array.isArray(b)) b.forEach(collect);
+            };
+            collect(geoms[0].boundaries);
+            if (indices.size === 0) return null;
+
+            let sx = 0, sy = 0, sz = 0;
+            indices.forEach(i => { if (realVerts[i]) { sx += realVerts[i][0]; sy += realVerts[i][1]; sz += realVerts[i][2]; } });
+            const n = indices.size;
+            const cx = sx / n, cy = sy / n, cz = sz / n;
+
+            // Detect source CRS
+            let sourceCRS = 'EPSG:28992';
+            const rs = cityJSON.metadata?.referenceSystem || '';
+            const m  = rs.match(/EPSG[::]+(\d+)/);
+            if (m) sourceCRS = m[1] === '7415' ? 'EPSG:28992' : `EPSG:${m[1]}`;
+
+            if (typeof proj4 === 'undefined') return null;
+            const [lon, lat] = proj4(sourceCRS, 'EPSG:4326', [cx, cy]);
+            return Cesium.Cartesian3.fromDegrees(lon, lat, cz + 30);
+        } catch (_) { return null; }
+    }
+
+    /**
+     * Place coloured label pins above the candidate and its BKAFI pairs, and draw
+     * arrows from the candidate to each pair.
+     * @param {string} candidateId
+     * @param {Array}  pairs        – same array passed to showClassifierResultsInComparisonWindow
+     * @param {Array}  pairCityData – [{buildingId, cityJSON}] fetched during the comparison window
+     */
+    addBuildingMarkers(candidateId, pairs, pairCityData = []) {
+        this.clearBuildingMarkers();
+        if (!this.viewer) return;
+        this.buildingMarkers = [];
+
+        // ── Build label/color info for each building ──────────────────────────
+        const info = {};
+        info[candidateId] = {
+            text: '▶ Candidate',
+            bg:   Cesium.Color.fromCssColorString('#1e88e5').withAlpha(0.92),
+            line: null
+        };
+        (pairs || []).forEach(pair => {
+            const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
+            const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+            let text, bg, arrowColor;
+            if (tl === 1) {
+                text = '✓ True Match';       bg = Cesium.Color.fromCssColorString('#16a34a').withAlpha(0.92); arrowColor = Cesium.Color.fromCssColorString('#22c55e').withAlpha(0.85);
+            } else if (pred === 1 && tl === 0) {
+                text = '⚠ False Positive';   bg = Cesium.Color.fromCssColorString('#ea580c').withAlpha(0.92); arrowColor = Cesium.Color.fromCssColorString('#f97316').withAlpha(0.85);
+            } else {
+                text = '✗ No Match';         bg = Cesium.Color.fromCssColorString('#64748b').withAlpha(0.85); arrowColor = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.7);
+            }
+            info[pair.index_id] = { text, bg, arrowColor };
+        });
+
+        // ── Collect positions ─────────────────────────────────────────────────
+        // 1) From entities already in the Cesium viewer
+        const positions = {};
+        this.layerEntities.forEach((entities) => {
+            entities.forEach(entity => {
+                const bid = entity.buildingId;
+                if (bid && info[bid] && !positions[bid]) {
+                    const pos = this._getEntityCentroid(entity);
+                    if (pos) positions[bid] = pos;
+                }
+            });
+        });
+
+        // 2) From raw cityJSON (pairs from Source B not loaded in the viewer)
+        pairCityData.forEach(pcd => {
+            if (!pcd) return;
+            const bid = pcd.buildingId;
+            if (bid && info[bid] && !positions[bid]) {
+                const pos = this._getCentroidFromCityJSON(pcd.cityJSON);
+                if (pos) positions[bid] = pos;
+            }
+        });
+
+        const candidatePos = positions[candidateId];
+
+        // ── Add a label pin for every building we have a position for ─────────
+        Object.entries(positions).forEach(([bid, pos]) => {
+            const { text, bg } = info[bid];
+            const pin = this.viewer.entities.add({
+                position: pos,
+                label: {
+                    text,
+                    font: 'bold 13px "Segoe UI", sans-serif',
+                    fillColor: Cesium.Color.WHITE,
+                    backgroundColor: bg,
+                    showBackground: true,
+                    backgroundPadding: new Cesium.Cartesian2(10, 6),
+                    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset: new Cesium.Cartesian2(0, -8),
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                }
+            });
+            this.buildingMarkers.push(pin);
+        });
+
+        // ── Draw arrow lines from candidate to each pair ──────────────────────
+        if (candidatePos) {
+            (pairs || []).forEach(pair => {
+                const pairPos = positions[pair.index_id];
+                if (!pairPos) return;
+                const { arrowColor } = info[pair.index_id];
+                const arrow = this.viewer.entities.add({
+                    polyline: {
+                        positions: [candidatePos, pairPos],
+                        width: 5,
+                        material: new Cesium.PolylineArrowMaterialProperty(arrowColor),
+                        clampToGround: false,
+                    }
+                });
+                this.buildingMarkers.push(arrow);
+            });
+        }
+
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
+    findEntityByBuildingId(buildingId) {
+        let found = null;
+        this.layerEntities.forEach((entities) => {
+            if (found) return;
+            entities.forEach(entity => {
+                if (!found && entity.buildingId === buildingId) found = entity;
+            });
+        });
+        return found;
+    }
+
+    clearBuildingMarkers() {
+        if (!this.viewer || !this.buildingMarkers) return;
+        this.buildingMarkers.forEach(m => { try { this.viewer.entities.remove(m); } catch (_) {} });
+        this.buildingMarkers = [];
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
     showError(message) {
         // Add error display
         const errorDiv = document.createElement('div');
@@ -1430,6 +1987,38 @@ class CesiumCityJSONViewer {
     zoomOut() {
         if (!this.viewer || !this.viewer.camera) return;
         this.viewer.camera.zoomOut(this.viewer.camera.positionCartographic.height * 0.2);
+    }
+
+    /** Rotate camera left (counter-clockwise) — uses Cesium's lookLeft for reliable rotation */
+    rotateLeft() {
+        if (!this.viewer || !this.viewer.camera) return;
+        const angle = Cesium.Math.toRadians(15);
+        this.viewer.camera.lookLeft(angle);
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
+    /** Rotate camera right (clockwise) — uses Cesium's lookRight */
+    rotateRight() {
+        if (!this.viewer || !this.viewer.camera) return;
+        const angle = Cesium.Math.toRadians(15);
+        this.viewer.camera.lookRight(angle);
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
+    /** Tilt down toward horizon (see more of building sides) — larger step for easier exploration */
+    tiltDown() {
+        if (!this.viewer || !this.viewer.camera) return;
+        const angle = Cesium.Math.toRadians(12);
+        this.viewer.camera.lookDown(angle);
+        if (this.viewer.scene) this.viewer.scene.requestRender();
+    }
+
+    /** Tilt up toward top-down view */
+    tiltUp() {
+        if (!this.viewer || !this.viewer.camera) return;
+        const angle = Cesium.Math.toRadians(12);
+        this.viewer.camera.lookUp(angle);
+        if (this.viewer.scene) this.viewer.scene.requestRender();
     }
 
     setBasemap(mode) {

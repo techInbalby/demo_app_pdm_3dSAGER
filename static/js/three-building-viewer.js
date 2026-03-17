@@ -231,7 +231,7 @@ class ThreeBuildingViewer {
                 
                 // Fit camera to fallback building (isometric view)
                 const center = new THREE.Vector3(0, 10, 0);
-                const distance = 40;
+                const distance = 22;
                 const angle = Math.PI / 6; // 30 degrees
                 this.camera.position.set(
                     distance * Math.cos(angle) * Math.cos(angle),
@@ -387,7 +387,7 @@ class ThreeBuildingViewer {
             if (!buildingInFrustum) {
                 console.warn('Building is not in camera frustum! Adjusting camera...');
                 // Try to fix camera position
-                this.camera.position.set(boxCenter.x, boxCenter.y + maxDim * 2, boxCenter.z + maxDim * 2);
+                this.camera.position.set(boxCenter.x, boxCenter.y + maxDim * 1.2, boxCenter.z + maxDim * 1.2);
                 this.camera.lookAt(boxCenter);
                 this.camera.updateProjectionMatrix();
                 if (this.controls) {
@@ -629,8 +629,8 @@ class ThreeBuildingViewer {
             console.log('Building bounding box size:', size);
             
             const maxDim = Math.max(size.x, size.y, size.z);
-            // Use a consistent distance for all buildings (isometric-like view)
-            const distance = Math.max(maxDim * 2.5, 100);
+            // Zoom in closer — distance = 1.5× largest dimension, min 35 units
+            const distance = Math.max(maxDim * 1.5, 35);
             
             console.log('Camera distance:', distance);
             
