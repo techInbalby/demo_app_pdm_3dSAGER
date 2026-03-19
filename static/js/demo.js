@@ -37,99 +37,589 @@ function getSelectedSummaryFiles() {
     return [];
 }
 
-// Tutorial system
+// ─── Tutorial system ──────────────────────────────────────────────────────────
 let tutorialState = {
     currentStep: 0,
     completed: false,
     fileLoaded: false,
-    buildingClicked: false
+    buildingClicked: false,
+    pairsOpened: false,
+    featuresCalculated: false,
+    bkafiRun: false,
+    classifierRun: false,
+    demoRunning: false   // true while "Run for me" is in progress
 };
 
+// ── Tutorial step definitions ─────────────────────────────────────────────────
+// highlight   = CSS selector for the spotlight backdrop (section-level)
+// beaconSelector = CSS selector for the pulsing beacon ring (button-level)
+// waitForAction  = key in tutorialState that must be true before auto-advancing
+// autoDemo    = function called by "Run for me" button
 const tutorialSteps = [
+
+    // ── 0: Welcome ────────────────────────────────────────────────────────────
     {
-        title: "Welcome to 3dSAGER Demo",
+        title: "Welcome to 3dSAGER",
         content: `
             <div class="tutorial-step-content">
-                <p class="tutorial-intro">This interactive tutorial will guide you through using the 3dSAGER pipeline to explore and process 3D city models.</p>
-                <p>You can explore files from both <strong>Candidates</strong> (Source A) and <strong>Index</strong> (Source B) tabs. However, to run the pipeline stages, you'll need to select a <strong>Candidates</strong> file.</p>
+                <p class="tutorial-intro"><strong>3dSAGER</strong> automatically answers the question: <em>"Does this building in dataset A have a matching building in dataset B?"</em> for every building, in 3D, at scale.</p>
+                <p>This is <strong>entity resolution</strong>: finding which records across two datasets refer to the same real-world object.</p>
+                <p>We'll run the full pipeline using two real buildings from The Hague, each with a different outcome:</p>
+                <div class="tutorial-example-buildings">
+                    <div class="tutorial-building-card tutorial-building-true">
+                        <span class="tutorial-building-icon">✅</span>
+                        <div>
+                            <strong>True Match</strong><br>
+                            <code>bag_0518100000279594</code><br>
+                            <small>90.44 % confidence — correct identification</small>
+                        </div>
+                    </div>
+                    <div class="tutorial-building-card tutorial-building-false">
+                        <span class="tutorial-building-icon">⚠️</span>
+                        <div>
+                            <strong>False Positive</strong><br>
+                            <code>bag_0518100000316711</code><br>
+                            <small>57.67 % confidence — wrong match</small>
+                        </div>
+                    </div>
+                </div>
+                <p style="margin-top:10px;color:#888;font-size:13px">Use <strong>▶ Run for me</strong> on each step to watch it happen automatically, or interact yourself.</p>
             </div>
         `,
         highlight: null,
-        waitForAction: false
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
     },
+
+    // ── 1: Load a Candidates layer ────────────────────────────────────────────
     {
-        title: "Step 1: Explore Files",
+        title: "Load the City Data",
         content: `
             <div class="tutorial-step-content">
-                <h4>Select a file to explore</h4>
-                <p>Browse the file lists in the <strong>Candidates</strong> or <strong>Index</strong> tabs in the sidebar. Click on any file to load it in the 3D viewer.</p>
-                <p class="tutorial-hint">💡 <em>Wait a few seconds after clicking a file for it to load in the viewer.</em></p>
+                <p>First, load a Candidates dataset into the 3D viewer. In the <strong>Layers</strong> panel, check the checkbox next to <strong>TheHague3D_Batch_07_Loosduinen_2022-08-08.json</strong>.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>The checkbox is highlighted in the Layers panel. Tick it to load the dataset — or press <strong>▶ Run for me</strong>.</div>
+                </div>
+                <p class="tutorial-hint">💡 <em>Once loaded, thousands of buildings appear in the 3D viewer in blue. Both of our example buildings are in this dataset.</em></p>
             </div>
         `,
-        highlight: '.file-selection',
-        waitForAction: 'fileLoaded'
+        highlight: '#legend-col',
+        beaconSelector: '#viewer-legend-items .legend-layer-cb',
+        waitForAction: 'fileLoaded',
+        autoDemo: () => {
+            const firstA = allAvailableFiles.A && allAvailableFiles.A[0];
+            if (firstA && !layerState[firstA.path]?.visible) {
+                toggleLayer(firstA.path, 'A', true);
+            }
+        }
     },
+
+    // ── 2: Pipeline overview / color legend ───────────────────────────────────
     {
-        title: "Step 2: Explore Buildings",
+        title: "The 3dSAGER Pipeline",
         content: `
             <div class="tutorial-step-content">
-                <h4>Click on a building</h4>
-                <p>Once a file is loaded, click on any building in the 3D viewer to see its properties. You can rotate, pan, and zoom the view using your mouse or touch controls.</p>
-                <p class="tutorial-hint">💡 <em>The building properties window will show the building ID and available actions.</em></p>
+                <p>Look at the <strong>left sidebar</strong> — the three pipeline stages are now active. Each stage changes building colours in the 3D viewer.</p>
+                <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start">
+                    <div><span class="tutorial-swatch" style="background:rgb(116,151,223)"></span>&nbsp;<strong>Blue</strong> — loaded, no features yet</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(255,152,0)"></span>&nbsp;<strong>Orange</strong> — geometric features calculated (Stage 1)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(255,235,59)"></span>&nbsp;<strong>Yellow</strong> — candidate pairs generated (Stage 2)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong>Green</strong> — true match (Stage 3)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong>Red</strong> — false positive (Stage 3)</div>
+                </div>
+                <p class="tutorial-hint">💡 <em>Let's run each stage and watch the colours change!</em></p>
+            </div>
+        `,
+        highlight: '#pipeline-section',
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
+    },
+
+    // ── 3: Geometric Featurization ────────────────────────────────────────────
+    {
+        title: "Stage 1 — Geometric Featurization",
+        content: `
+            <div class="tutorial-step-content">
+                <p>The pipeline extracts <strong>shape-based features</strong> from every building: footprint area, height, perimeter, compactness, and more.</p>
+                <p>These become the numeric fingerprint the classifier uses later to find matches.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>The <strong>"Calculate Features"</strong> button is highlighted in the sidebar. Click it, or use <strong>▶ Run for me</strong> below.</div>
+                </div>
+                <div class="tutorial-color-legend">
+                    <span class="tutorial-swatch" style="background:rgb(116,151,223)"></span> Blue
+                    &nbsp;→&nbsp;
+                    <span class="tutorial-swatch" style="background:rgb(255,152,0)"></span> <strong style="color:#ff9800">Orange</strong> after Stage 1
+                </div>
+            </div>
+        `,
+        highlight: '#step-1',
+        beaconSelector: '#step-btn-1',
+        waitForAction: 'calculateFeatures',
+        autoDemo: () => { document.getElementById('step-btn-1').click(); }
+    },
+
+    // ── 4: BKAFI Blocking ─────────────────────────────────────────────────────
+    {
+        title: "Stage 2 — BKAFI Blocking",
+        content: `
+            <div class="tutorial-step-content">
+                <p>Comparing every Candidate to every Index building is intractable. <strong>BKAFI Blocking</strong> uses geometry proximity to generate a short list of <em>likely pairs</em> for each building.</p>
+                <p>Our two example buildings each get 3 candidate pairs from the Index dataset.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Click <strong>"Run BKAFI"</strong> in the sidebar, or use <strong>▶ Run for me</strong>.</div>
+                </div>
+                <div class="tutorial-color-legend">
+                    <span class="tutorial-swatch" style="background:rgb(255,152,0)"></span> Orange
+                    &nbsp;→&nbsp;
+                    <span class="tutorial-swatch" style="background:rgb(255,235,59)"></span> <strong style="color:#b8960c">Yellow</strong> after Stage 2
+                </div>
+            </div>
+        `,
+        highlight: '#step-2',
+        beaconSelector: '#step-btn-2',
+        waitForAction: 'runBKAFI',
+        autoDemo: () => { document.getElementById('step-btn-2').click(); }
+    },
+
+    // ── 5: Run Matching Classifier ────────────────────────────────────────────
+    {
+        title: "Stage 3 — Matching Classifier",
+        content: `
+            <div class="tutorial-step-content">
+                <p>Now let's run the full classifier across <em>all</em> buildings. The <strong>Bagging Classifier</strong> scores every BKAFI pair and paints each building with its verdict.</p>
+                <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:10px">
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — true match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive (wrong match)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
+                </div>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Click <strong>"Run Classifier"</strong> in the sidebar — or press <strong>▶ Run for me</strong>.</div>
+                </div>
+            </div>
+        `,
+        highlight: '#step-3',
+        beaconSelector: '#step-btn-3',
+        waitForAction: 'viewResults',
+        autoDemo: () => {
+            if (document.getElementById('bkafi-comparison-window')?.style.display === 'flex') {
+                closeBkafiComparisonWindow();
+            }
+            document.getElementById('step-btn-3').click();
+        }
+    },
+
+    // ── 6: Zoom in + arrow marker on example building ─────────────────────────
+    {
+        title: "Meet Our Example Building",
+        content: `
+            <div class="tutorial-step-content">
+                <p>All buildings are now <strong style="color:#b8960c">yellow</strong> — Stage 2 is complete. Let's zoom in to the building we'll follow through the rest of the tutorial.</p>
+                <div class="tutorial-building-card tutorial-building-true" style="margin-bottom:12px">
+                    <span class="tutorial-building-icon">📍</span>
+                    <div>
+                        <strong>bag_0518100000279594</strong><br>
+                        <small>This is our <em>True Match</em> example.</small>
+                    </div>
+                </div>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Press <strong>▶ Run for me</strong> to fly the camera to the building and place an arrow label above it.</div>
+                </div>
+                <p class="tutorial-hint">💡 <em>You'll see a <strong>"▼ Example building"</strong> label hovering above it in the 3D viewer.</em></p>
             </div>
         `,
         highlight: '#viewer',
-        waitForAction: 'buildingClicked'
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: async () => {
+            // Give the viewer a moment to settle before flying in
+            await new Promise(r => setTimeout(r, 300));
+            zoomToBuilding('bag_0518100000279594');
+            setTimeout(() => addTutorialMarker('bag_0518100000279594'), 800);
+        }
     },
+
+    // ── 6: Load an Index layer and dim it ─────────────────────────────────────
     {
-        title: "Step 3: Run Pipeline Stages",
+        title: "Compare with the Index Dataset",
         content: `
             <div class="tutorial-step-content">
-                <h4>Use the 3dSAGER Pipeline</h4>
-                <p><strong>Note:</strong> Pipeline stages are only available when a <strong>Candidates</strong> file is loaded.</p>
-                <p>Use the <strong>3dSAGER Pipeline</strong> section in the sidebar to run each stage:</p>
-                <ul class="tutorial-sublist">
-                    <li><strong>Geometric Featurization:</strong> Calculate features (buildings turn orange)</li>
-                    <li><strong>BKAFI Blocking:</strong> Generate candidate pairs (buildings turn yellow)</li>
-                    <li><strong>Matching Classifier:</strong> Find matches (green=true match, red=false positive, gray=no match)</li>
-                </ul>
-                <p class="tutorial-hint">💡 <em>You can also run stages from the building properties window.</em></p>
+                <p>The pipeline compares our Candidates buildings against an <strong>Index (B)</strong> reference dataset. Let's load one Index tile and dim it to see both datasets overlaid.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>In the Layers panel, check a checkbox under <strong>INDEX (B)</strong> — or press <strong>▶ Run for me</strong>. Then click the <strong>◑</strong> (dim) button next to it.</div>
+                </div>
+                <p class="tutorial-hint">💡 <em>Dimming the Index layer lets you see how the two datasets overlap spatially — the basis for BKAFI candidate generation.</em></p>
             </div>
         `,
-        highlight: '.pipeline-steps',
-        waitForAction: false
+        highlight: '#legend-col',
+        beaconSelector: '.legend-layer-cb[data-source="B"]',
+        waitForAction: false,
+        autoDemo: async () => {
+            const firstB = allAvailableFiles.B && allAvailableFiles.B[0];
+            if (!firstB) return;
+            if (!layerState[firstB.path]?.visible) {
+                toggleLayer(firstB.path, 'B', true);
+                // Wait for the layer to load (viewer may auto-fly to it)
+                await new Promise(r => setTimeout(r, 2500));
+            }
+            if (layerState[firstB.path]?.visible && !layerState[firstB.path]?.dimmed) {
+                toggleLayerDimmed(firstB.path);
+            }
+            // Re-zoom to the example building after loading may have triggered a camera fly-out
+            zoomToBuilding('bag_0518100000279594');
+            setTimeout(() => addTutorialMarker('bag_0518100000279594'), 800);
+        }
     },
+
+    // ── 7: Click on the example building ─────────────────────────────────────
     {
-        title: "Step 4: View Results",
+        title: "Open the Building Properties",
         content: `
             <div class="tutorial-step-content">
-                <h4>Explore Results</h4>
-                <p>After running BKAFI, click yellow a building to see its pairs. Use the <strong>"View Pairs Visually"</strong> button to compare buildings side-by-side.</p>
-                <p>After running the classifier, view detailed results in the comparison window.</p>
-                <p class="tutorial-hint">💡 <em>Building colors change based on pipeline stage completion.</em></p>
+                <p>Click on the <strong>example building</strong> marked with the arrow in the 3D viewer to open its <strong>Building Properties</strong> panel.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>The arrow label points to <code>bag_0518100000279594</code>. Click it — or press <strong>▶ Run for me</strong>.</div>
+                </div>
+                <p>Once open, the panel will show you the data extracted by the first two pipeline stages.</p>
+            </div>
+        `,
+        highlight: '#viewer',
+        beaconSelector: '#viewer',
+        waitForAction: 'buildingClicked',
+        autoDemo: () => {
+            showBuildingProperties('bag_0518100000279594', null, {});
+            // Marker removal is handled by updateTutorialStep when advancing to step 8
+        }
+    },
+
+    // ── 8: Explain the Building Properties panel ──────────────────────────────
+    {
+        title: "Building Properties: Stage 1 Features",
+        content: `
+            <div class="tutorial-step-content">
+                <p>The <strong>Building Properties</strong> panel has two sections. Scroll to the <strong>bottom</strong> of the panel to see the <strong>Geometric Features</strong>:</p>
+                <ul class="tutorial-sublist">
+                    <li><strong>Footprint Area</strong> — 2D area of the building outline (m²)</li>
+                    <li><strong>Height</strong> — measured from ground to roof peak (m)</li>
+                    <li><strong>Perimeter</strong> — total length of the footprint boundary (m)</li>
+                    <li><strong>Compactness</strong> — how close to a circle the footprint is (0–1)</li>
+                    <li><strong>Vertices</strong> — number of outline points (shape complexity)</li>
+                </ul>
+                <p>These numbers are the <em>numeric fingerprint</em> that Stage 3 uses to score each pair. Two identical buildings should have nearly identical feature values.</p>
+            </div>
+        `,
+        highlight: '#building-properties-window',
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
+    },
+
+    // ── 9: Explain BKAFI Pairs section ───────────────────────────────────────
+    {
+        title: "Building Properties: Stage 2 Pairs",
+        content: `
+            <div class="tutorial-step-content">
+                <p>Scroll down in the panel to the <strong>BKAFI Pairs</strong> section. This lists the candidate Index buildings that BKAFI selected as <em>likely matches</em> for our building.</p>
+                <ul class="tutorial-sublist">
+                    <li>Each row is an Index building that might be the same real-world object.</li>
+                    <li>For <code>bag_0518100000279594</code> there are <strong>3 candidate pairs</strong>.</li>
+                    <li>Only one of them is the true match — the classifier decides which.</li>
+                </ul>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Press <strong>▶ Run for me</strong> (or click <strong>"View Pairs Visually"</strong>) to open the side-by-side 3D comparison.</div>
+                </div>
+            </div>
+        `,
+        highlight: '#building-properties-window',
+        beaconSelector: '#tutorial-view-pairs-btn',
+        waitForAction: 'pairsOpened',
+        autoDemo: async () => {
+            const bId = 'bag_0518100000279594';
+            if (document.getElementById('building-properties-window')?.style.display === 'none' ||
+                !document.getElementById('building-properties-window')?.style.display) {
+                showBuildingProperties(bId, null, {});
+                await new Promise(r => setTimeout(r, 800));
+            }
+            const cached = buildingBkafiCache[bId];
+            if (cached && cached.pairs && cached.pairs.length > 0) {
+                openBkafiComparisonWindow(bId, cached.pairs);
+            } else {
+                try {
+                    const resp = await fetch(`/api/building/bkafi/${encodeURIComponent(bId)}`);
+                    const data = await resp.json();
+                    if (data.pairs && data.pairs.length > 0) openBkafiComparisonWindow(bId, data.pairs);
+                } catch (e) { console.warn('Tutorial pairs demo failed:', e); }
+            }
+        }
+    },
+
+    // ── 10: Explain the comparison window ────────────────────────────────────
+    {
+        title: "The Pairs Comparison View",
+        content: `
+            <div class="tutorial-step-content">
+                <p>The <strong>side-by-side comparison</strong> shows:</p>
+                <ul class="tutorial-sublist">
+                    <li><strong>Left panel</strong> — the Candidate building (<code>bag_0518100000279594</code>) you clicked.</li>
+                    <li><strong>Right panel</strong> — one of the BKAFI candidate pairs from the Index dataset. Use the <strong>← →</strong> arrows to cycle through all pairs.</li>
+                </ul>
+                <p>You can <strong>rotate, zoom and pan</strong> each 3D model independently to compare their shapes.</p>
+                <p>Before running the classifier, <strong>make your own guess</strong>: which Index building looks like the same real-world object as the Candidate?</p>
+                <p class="tutorial-hint">💡 <em>Once you've formed your guess, press <strong>"Reveal Model's Answer"</strong> to see what the classifier decided.</em></p>
             </div>
         `,
         highlight: null,
-        waitForAction: false
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
     },
+
+    // ── 11: Explain Reveal Model's Answer ────────────────────────────────────
     {
-        title: "You're All Set!",
+        title: "Reveal the Model's Answer",
         content: `
             <div class="tutorial-step-content">
-                <h4>Ready to explore</h4>
-                <p>You now know how to use the 3dSAGER demo! Feel free to explore different files and run the pipeline stages.</p>
+                <p>After browsing the pairs and forming your guess, click <strong>"Reveal Model's Answer"</strong> to see the classifier's decision for each pair.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">↓</div>
+                    <div>The <strong>"Reveal Model's Answer"</strong> button is at the bottom of the comparison window. Press <strong>▶ Run for me</strong> to click it.</div>
+                </div>
+                <p>The result badge will show:</p>
+                <ul class="tutorial-sublist">
+                    <li><span style="color:#4caf50"><strong>MATCH</strong></span> — the classifier predicts these are the same building.</li>
+                    <li><span style="color:#f44336"><strong>NO MATCH</strong></span> — the classifier predicts they are different.</li>
+                </ul>
+                <p class="tutorial-hint">💡 <em>For <code>bag_0518100000279594</code> the correct Index pair scores <strong>90.44 %</strong> confidence — a clear true match.</em></p>
+            </div>
+        `,
+        highlight: null,
+        beaconSelector: '#reveal-answer-btn',
+        waitForAction: false,
+        autoDemo: () => {
+            const btn = document.getElementById('reveal-answer-btn');
+            if (btn && !btn.disabled) btn.click();
+        }
+    },
+
+    // ── 12: Show Matches on Map ───────────────────────────────────────────────
+    {
+        title: "See the Match on the Map 🗺",
+        content: `
+            <div class="tutorial-step-content">
+                <p>Great — you can see the model's verdict for each pair. Now let's close this window and jump straight to the building on the map.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">↓</div>
+                    <div>Click <strong>"🗺 Show Matches on Map"</strong> at the bottom of the comparison window — or press <strong>▶ Run for me</strong>.</div>
+                </div>
+                <p class="tutorial-hint">💡 <em>This closes the comparison, places markers on the matched buildings, and flies the camera to <code>bag_0518100000279594</code>.</em></p>
+            </div>
+        `,
+        highlight: null,
+        beaconSelector: '.back-to-map-btn',
+        waitForAction: false,
+        autoDemo: () => {
+            const btn = document.querySelector('.back-to-map-btn');
+            if (btn) btn.click();
+        }
+    },
+
+    // ── 13: See the true match on the map ────────────────────────────────────
+    {
+        title: "Match Found — See it on the Map ✅",
+        content: `
+            <div class="tutorial-step-content">
+                <div class="tutorial-building-card tutorial-building-true" style="margin-bottom:14px">
+                    <span class="tutorial-building-icon">🟢</span>
+                    <div>
+                        <strong>bag_0518100000279594</strong><br>
+                        <small>Confidence <strong>90.44 %</strong> · Predicted MATCH · True label MATCH</small>
+                    </div>
+                </div>
+                <p>This building is now <strong style="color:#4caf50">green</strong> on the map — the classifier correctly found its match in the Index dataset.</p>
+                <p class="tutorial-hint">💡 <em>The 2 other Index candidates (Pair 2 &amp; 3) were evaluated but scored lower — they remain default colour.</em></p>
+                <p style="margin-top:10px">👇 Press <strong>Next →</strong> to zoom out and see the full classification result across all buildings.</p>
+            </div>
+        `,
+        highlight: null,
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
+    },
+
+    // ── 14: Zoom out — show the full classified map ───────────────────────────
+    {
+        title: "The Full Classification Map",
+        content: `
+            <div class="tutorial-step-content">
+                <p>Every Candidate building has now been scored. Scroll and pan the map to explore the results:</p>
+                <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:12px">
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — true match found in the Index</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive (wrong match predicted)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
+                </div>
+                <p style="margin-top:10px">👇 When you're ready, press <strong>Next →</strong> to walk through a <strong style="color:#f44336">red</strong> building and see <em>why</em> the classifier was fooled.</p>
+            </div>
+        `,
+        highlight: null,
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: () => {
+            // Fly out to show the full classified dataset
+            if (window.viewer && window.viewer.viewer) {
+                const v = window.viewer.viewer;
+                v.camera.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(4.298, 52.073, 1800),
+                    orientation: {
+                        heading: Cesium.Math.toRadians(0),
+                        pitch: Cesium.Math.toRadians(-55),
+                        roll: 0
+                    },
+                    duration: 2.0
+                });
+            }
+        }
+    },
+
+    // ── 15: False positive example — fly there and show arrows ───────────────
+    {
+        title: "False Positive Example ⚠️",
+        content: `
+            <div class="tutorial-step-content">
+                <div class="tutorial-building-card tutorial-building-false" style="margin-bottom:14px">
+                    <span class="tutorial-building-icon">🔴</span>
+                    <div>
+                        <strong>bag_0518100000316711</strong><br>
+                        <small>Confidence <strong>57.67 %</strong> · Predicted MATCH · True label NO MATCH</small>
+                    </div>
+                </div>
+                <p>Let's repeat the same process on a <strong style="color:#f44336">red</strong> building. The classifier matched this Candidate to Index building <code>0518100000302961</code> at 57.67 % confidence — but ground truth says they are <strong>different buildings</strong>.</p>
+                <p>Press <strong>▶ Run for me</strong> to fly to it and see the candidate pair arrows on the map.</p>
+                <p class="tutorial-hint">💡 <em>Geometrically similar neighbours can fool the classifier. 3dSAGER surfaces these errors so you can inspect and correct them.</em></p>
+            </div>
+        `,
+        highlight: null,
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: async () => {
+            const bId = 'bag_0518100000316711';
+            zoomToBuilding(bId);
+            try {
+                // 1) Get BKAFI pairs (use cache if available; cache stores full response object)
+                const cached = buildingBkafiCache[bId];
+                let pairs = cached ? (Array.isArray(cached) ? cached : cached.pairs) : null;
+                if (!pairs || pairs.length === 0) {
+                    const resp = await fetch(`/api/building/bkafi/${encodeURIComponent(bId)}`);
+                    const data = await resp.json();
+                    pairs = data.pairs || [];
+                    if (pairs.length > 0) buildingBkafiCache[bId] = data;
+                }
+                if (!pairs || pairs.length === 0) return;
+
+                // 2) Fetch CityJSON for each pair building so we have their 3-D positions
+                //    (Index B buildings may not be loaded as Cesium entities yet)
+                const pairCityData = await Promise.all(
+                    pairs.map(p =>
+                        _fetchBuildingDataForComparison(p.index_id).catch(() => null)
+                    )
+                );
+
+                // 3) Wait for the camera fly-to to finish before placing markers
+                await new Promise(r => setTimeout(r, 1800));
+                if (window.viewer && window.viewer.addBuildingMarkers) {
+                    window.viewer.addBuildingMarkers(bId, pairs, pairCityData.filter(Boolean));
+                }
+            } catch (e) { console.warn('Tutorial FP markers failed:', e); }
+        }
+    },
+
+    // ── 16: False positive — open building properties ─────────────────────────
+    {
+        title: "Open the False Positive Properties",
+        content: `
+            <div class="tutorial-step-content">
+                <p>The arrows above show the candidate Index pairs for <code>bag_0518100000316711</code>. Now let's open its <strong>Building Properties</strong> to inspect what the classifier saw.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Click the <strong style="color:#f44336">red building</strong> marked with the arrow in the viewer — or press <strong>▶ Run for me</strong>.</div>
+                </div>
+            </div>
+        `,
+        highlight: '#viewer',
+        beaconSelector: '#viewer',
+        waitForAction: 'buildingClicked',
+        autoDemo: async () => {
+            const bId = 'bag_0518100000316711';
+            showBuildingProperties(bId, null, {});
+        }
+    },
+
+    // ── 17: False positive — open pairs view ─────────────────────────────────
+    {
+        title: "Inspect the False Positive Pairs",
+        content: `
+            <div class="tutorial-step-content">
+                <p>With the Building Properties panel open for <code>bag_0518100000316711</code>, scroll to the <strong>BKAFI Pairs</strong> section and click <strong>"View Pairs Visually"</strong>.</p>
+                <div class="tutorial-action-row">
+                    <div class="tutorial-action-arrow">←</div>
+                    <div>Press <strong>▶ Run for me</strong> to open the comparison window for this building.</div>
+                </div>
+                <p>Browse the pairs with <strong>← →</strong>, then reveal the model's answer to see <em>why</em> the classifier was fooled — the matched pair looks geometrically very similar but is a different real-world building.</p>
+            </div>
+        `,
+        highlight: '#building-properties-window',
+        beaconSelector: '#tutorial-view-pairs-btn',
+        waitForAction: false,
+        autoDemo: async () => {
+            const bId = 'bag_0518100000316711';
+            if (document.getElementById('building-properties-window')?.style.display === 'none' ||
+                !document.getElementById('building-properties-window')?.style.display) {
+                showBuildingProperties(bId, null, {});
+                await new Promise(r => setTimeout(r, 800));
+            }
+            const cached = buildingBkafiCache[bId];
+            if (cached && cached.pairs && cached.pairs.length > 0) {
+                openBkafiComparisonWindow(bId, cached.pairs);
+            } else {
+                try {
+                    const resp = await fetch(`/api/building/bkafi/${encodeURIComponent(bId)}`);
+                    const data = await resp.json();
+                    if (data.pairs && data.pairs.length > 0) openBkafiComparisonWindow(bId, data.pairs);
+                } catch (e) { console.warn('Tutorial pairs demo failed:', e); }
+            }
+        }
+    },
+
+    // ── 17: Summary ───────────────────────────────────────────────────────────
+    {
+        title: "You're All Set! 🎉",
+        content: `
+            <div class="tutorial-step-content">
+                <p>You've walked through the full <strong>3dSAGER pipeline</strong> with both a <strong style="color:#4caf50">true match</strong> and a <strong style="color:#f44336">false positive</strong> using real data from The Hague.</p>
                 <div class="tutorial-tips">
                     <h4>💡 Quick Tips:</h4>
                     <ul>
-                        <li>Building colors indicate pipeline stage status</li>
-                        <li>Use fullscreen for better viewing</li>
-                        <li>Loading messages appear during processing</li>
+                        <li>Click any <span style="color:#4caf50"><strong>green</strong></span> building to explore confirmed matches</li>
+                        <li>Click any <span style="color:#f44336"><strong>red</strong></span> building to investigate false positives</li>
+                        <li>Use <strong>"View Pairs Visually"</strong> to compare two 3D models side-by-side</li>
+                        <li>Use the <strong>◑</strong> button in the Layers panel to dim any layer for comparison</li>
+                        <li>Reopen this tutorial anytime with the <strong>📖 Tutorial</strong> button</li>
                     </ul>
                 </div>
             </div>
         `,
         highlight: null,
-        waitForAction: false
+        beaconSelector: null,
+        waitForAction: false,
+        autoDemo: null
     }
 ];
 
@@ -295,226 +785,335 @@ window.closeTutorialGuide = closeTutorialGuide;
 window.nextTutorialStep = nextTutorialStep;
 window.prevTutorialStep = prevTutorialStep;
 window.skipTutorial = skipTutorial;
+window.runDemoStep = runDemoStep;
 
-// Show tutorial
+// ── showTutorial ──────────────────────────────────────────────────────────────
 function showTutorial() {
     const tutorialGuide = document.getElementById('tutorial-guide');
-    if (tutorialGuide) {
-        tutorialGuide.style.display = 'flex';
-        document.body.classList.add('tutorial-open');
-        // Don't reset step if tutorial was just hidden (allow continuation)
-        if (tutorialState.completed) {
-            tutorialState.completed = false;
+    if (!tutorialGuide) return;
+    tutorialGuide.style.display = 'flex';
+    tutorialGuide.style.opacity = '';
+    tutorialGuide.style.pointerEvents = '';
+    document.body.classList.add('tutorial-open');
+    if (tutorialState.completed) {
+        tutorialState.completed = false;
             tutorialState.currentStep = 0;
             tutorialState.fileLoaded = false;
             tutorialState.buildingClicked = false;
-        }
-        updateTutorialStep();
+            tutorialState.pairsOpened = false;
+            tutorialState.featuresCalculated = false;
+            tutorialState.bkafiRun = false;
+            tutorialState.classifierRun = false;
+            tutorialState.demoRunning = false;
     }
+    updateTutorialStep();
 }
 
-// Update tutorial step display
+// ── updateTutorialStep ────────────────────────────────────────────────────────
 function updateTutorialStep() {
     const step = tutorialSteps[tutorialState.currentStep];
     if (!step) return;
-    
-    const titleEl = document.getElementById('tutorial-title');
-    const contentEl = document.getElementById('tutorial-step-content');
-    const nextBtn = document.getElementById('tutorial-next-btn');
-    const prevBtn = document.getElementById('tutorial-prev-btn');
-    const skipBtn = document.getElementById('tutorial-skip-btn');
-    const progressFill = document.getElementById('tutorial-progress-fill');
-    const progressText = document.getElementById('tutorial-progress-text');
-    
-    if (titleEl) titleEl.textContent = step.title;
-    if (contentEl) contentEl.innerHTML = step.content;
-    
-    // Update progress
+
+    const titleEl       = document.getElementById('tutorial-title');
+    const contentEl     = document.getElementById('tutorial-step-content');
+    const nextBtn       = document.getElementById('tutorial-next-btn');
+    const prevBtn       = document.getElementById('tutorial-prev-btn');
+    const skipBtn       = document.getElementById('tutorial-skip-btn');
+    const demoBtn       = document.getElementById('tutorial-demo-btn');
+    const tryBtn        = document.getElementById('tutorial-try-btn');
+    const progressFill  = document.getElementById('tutorial-progress-fill');
+    const progressText  = document.getElementById('tutorial-progress-text');
+
+    if (titleEl)   titleEl.textContent  = step.title;
+    if (contentEl) contentEl.innerHTML  = step.content;
+
     const progress = ((tutorialState.currentStep + 1) / tutorialSteps.length) * 100;
     if (progressFill) progressFill.style.width = progress + '%';
     if (progressText) progressText.textContent = `Step ${tutorialState.currentStep + 1} of ${tutorialSteps.length}`;
-    
-    // Update buttons - always show Next, Previous, and "Got it, let's try" buttons
-    const tryBtn = document.getElementById('tutorial-try-btn');
-    
-    // Previous button - always visible (enabled only if not on first step)
+
+    // ── Prev button ──────────────────────────────────────────────────────────
     if (prevBtn) {
         prevBtn.style.display = 'inline-block';
         prevBtn.disabled = tutorialState.currentStep === 0;
     }
-    
-    // Next button - always visible
-    if (nextBtn) {
-        if (tutorialState.currentStep === tutorialSteps.length - 1) {
-            nextBtn.textContent = 'Finish';
-            nextBtn.disabled = false;
+
+    // ── Demo button (▶ Run for me) — only for steps with autoDemo ────────────
+    if (demoBtn) {
+        if (step.autoDemo) {
+            demoBtn.style.display = 'inline-block';
+            demoBtn.disabled = false;
+            demoBtn.textContent = '▶ Run for me';
         } else {
-            nextBtn.textContent = 'Next';
-            // Always allow Next, even if the step action is not completed
-            nextBtn.disabled = false;
+            demoBtn.style.display = 'none';
         }
-        nextBtn.style.display = 'inline-block';
     }
-    
-    // "Got it, let's try!" button - always visible (enabled for interactive steps, disabled for others)
+
+    // ── "Try it myself" — only for autoDemo steps (so user can close & click) ─
     if (tryBtn) {
-        tryBtn.style.display = 'inline-block';
-        tryBtn.textContent = 'Got it, let\'s try!';
-        if (step.waitForAction) {
-            // Enable for interactive steps
+        if (step.autoDemo) {
+            tryBtn.style.display = 'inline-block';
             tryBtn.disabled = false;
-            tryBtn.style.opacity = '1';
-            tryBtn.style.cursor = 'pointer';
         } else {
-            // Disable for non-interactive steps (but still visible)
-            tryBtn.disabled = true;
-            tryBtn.style.opacity = '0.5';
-            tryBtn.style.cursor = 'not-allowed';
+            tryBtn.style.display = 'none';
         }
     }
-    
-    // Skip button - only on first step
+
+    // ── Next button ──────────────────────────────────────────────────────────
+    if (nextBtn) {
+        nextBtn.style.display = 'inline-block';
+        nextBtn.disabled = false;
+        nextBtn.textContent = tutorialState.currentStep === tutorialSteps.length - 1
+            ? 'Finish ✓'
+            : 'Next →';
+    }
+
+    // ── Skip button (only step 0) ─────────────────────────────────────────────
     if (skipBtn) {
         skipBtn.style.display = tutorialState.currentStep === 0 ? 'inline-block' : 'none';
     }
-    
-    // Highlight element if specified and scroll to it
-    if (step.highlight) {
-        // For step 3 (pipeline steps), ensure sidebar is visible and scroll to pipeline section
-        if (tutorialState.currentStep === 2) { // Step 3 is index 2
-            const sidebar = document.querySelector('.sidebar');
-            const pipelineSteps = document.querySelector('.pipeline-steps');
-            
-            if (sidebar && pipelineSteps) {
-                // First, scroll the page to show the sidebar (if it's not visible)
-                const sidebarRect = sidebar.getBoundingClientRect();
-                const isSidebarVisible = sidebarRect.top >= 0 && sidebarRect.left >= 0 && 
-                                        sidebarRect.bottom <= window.innerHeight && 
-                                        sidebarRect.right <= window.innerWidth;
-                
-                if (!isSidebarVisible) {
-                    sidebar.scrollIntoView({ 
-                        behavior: 'smooth', 
-                        block: 'nearest',
-                        inline: 'nearest'
-                    });
-                }
-                
-                // Then scroll the sidebar internally to show pipeline steps
-                setTimeout(() => {
-                    const pipelineRect = pipelineSteps.getBoundingClientRect();
-                    const sidebarRect = sidebar.getBoundingClientRect();
-                    
-                    // Calculate scroll position to center pipeline steps in sidebar
-                    const elementTop = pipelineSteps.offsetTop;
-                    const sidebarScrollTop = sidebar.scrollTop;
-                    const sidebarHeight = sidebar.clientHeight;
-                    const elementHeight = pipelineSteps.offsetHeight;
-                    
-                    // Scroll to center the element in sidebar viewport
-                    const targetScroll = elementTop - (sidebarHeight / 2) + (elementHeight / 2);
-                    
-                    sidebar.scrollTo({
-                        top: Math.max(0, targetScroll),
-                        behavior: 'smooth'
-                    });
-                }, 400);
-            }
+
+    // ── When entering the classifier step, close any open comparison window ──
+    if (step.beaconSelector === '#step-btn-3') {
+        const cw = document.getElementById('bkafi-comparison-window');
+        if (cw && cw.style.display === 'flex') closeBkafiComparisonWindow();
+    }
+
+    // ── Cesium building marker — visible on true-match steps 6,7,8 and FP click step 17 ─
+    if (tutorialState.currentStep === 6 || tutorialState.currentStep === 7 ||
+        tutorialState.currentStep === 8 || tutorialState.currentStep === 17) {
+        window.tutorialSuppressAutoFly = true;
+        const markerBid = tutorialState.currentStep === 17
+            ? 'bag_0518100000316711'
+            : 'bag_0518100000279594';
+        if (!tutorialMarkerEntity) {
+            setTimeout(() => addTutorialMarker(markerBid), 400);
         }
-        
-        // Highlight the element
+        // Step 17: clear the pair-arrow marker entities so they don't intercept clicks
+        if (tutorialState.currentStep === 17 && window.viewer && window.viewer.clearBuildingMarkers) {
+            window.viewer.clearBuildingMarkers();
+        }
+    } else {
+        window.tutorialSuppressAutoFly = false;
+        removeTutorialMarker();
+    }
+
+    // ── Spotlight highlight (section-level) ──────────────────────────────────
+    if (step.highlight) {
+        scrollSidebarToElement(step.highlight);
         highlightTutorialElement(step.highlight);
     } else {
-        const highlight = document.getElementById('tutorial-highlight');
-        if (highlight) highlight.style.display = 'none';
+        hideHighlight();
     }
-    
-    // Auto-advance if action is already completed
-    if (step.waitForAction && checkTutorialAction(step.waitForAction)) {
-        setTimeout(() => {
-            // Enable Next button when action is completed
-            if (nextBtn) {
-                nextBtn.textContent = 'Next';
-                nextBtn.disabled = false;
-            }
-            // Keep "Got it, let's try" visible but update its state
-            if (tryBtn) {
-                tryBtn.disabled = true;
-                tryBtn.style.opacity = '0.5';
-                tryBtn.style.cursor = 'not-allowed';
-            }
-        }, 1000);
+
+    // ── Pulsing beacon (button-level) ─────────────────────────────────────────
+    if (step.beaconSelector) {
+        positionBeacon(step.beaconSelector);
+    } else {
+        hideBeacon();
     }
 }
 
-// Check if tutorial action is completed
+// ── checkTutorialAction ───────────────────────────────────────────────────────
 function checkTutorialAction(action) {
-    switch(action) {
-        case 'fileLoaded':
-            return tutorialState.fileLoaded;
-        case 'buildingClicked':
-            return tutorialState.buildingClicked;
-        default:
-            return true;
+    switch (action) {
+        case 'fileLoaded':        return tutorialState.fileLoaded;
+        case 'buildingClicked':   return tutorialState.buildingClicked;
+        case 'pairsOpened':       return tutorialState.pairsOpened;
+        case 'calculateFeatures': return tutorialState.featuresCalculated;
+        case 'runBKAFI':          return tutorialState.bkafiRun;
+        case 'viewResults':       return tutorialState.classifierRun;
+        default:                  return true;
     }
 }
 
-// Highlight tutorial element and scroll to it
+// ── scrollSidebarToElement ────────────────────────────────────────────────────
+function scrollSidebarToElement(selector) {
+    const sidebar = document.querySelector('.sidebar');
+    const element = document.querySelector(selector);
+    if (!sidebar || !element || !sidebar.contains(element)) return;
+
+    const elementTop    = element.offsetTop;
+    const sidebarHeight = sidebar.clientHeight;
+    const elementHeight = element.offsetHeight;
+    const target        = elementTop - (sidebarHeight / 2) + (elementHeight / 2);
+
+    sidebar.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+}
+
+// ── highlightTutorialElement — spotlight backdrop ─────────────────────────────
+let _highlightTimer = null; // track pending show-timer so hideHighlight can cancel it
+
 function highlightTutorialElement(selector) {
     const highlight = document.getElementById('tutorial-highlight');
     if (!highlight || !selector) {
         if (highlight) highlight.style.display = 'none';
         return;
     }
-    
     const element = document.querySelector(selector);
-    if (element) {
-        // For elements inside sidebar, scroll sidebar container first
-        const sidebar = document.querySelector('.sidebar');
-        if (sidebar && sidebar.contains(element)) {
-            // Scroll sidebar to show the element
-            const elementTop = element.offsetTop;
-            const sidebarScrollTop = sidebar.scrollTop;
-            const sidebarHeight = sidebar.clientHeight;
-            const elementHeight = element.offsetHeight;
-            
-            // Calculate if element is visible in sidebar viewport
-            const elementBottom = elementTop + elementHeight;
-            const viewportTop = sidebarScrollTop;
-            const viewportBottom = sidebarScrollTop + sidebarHeight;
-            
-            // Scroll sidebar if element is not fully visible
-            if (elementTop < viewportTop || elementBottom > viewportBottom) {
-                sidebar.scrollTo({
-                    top: elementTop - (sidebarHeight / 2) + (elementHeight / 2),
-                    behavior: 'smooth'
-                });
-            }
-        } else {
-            // For other elements, use standard scrollIntoView
-            element.scrollIntoView({ 
-                behavior: 'smooth', 
-                block: 'center',
-                inline: 'nearest'
-            });
+    if (!element) { highlight.style.display = 'none'; return; }
+
+    if (_highlightTimer) clearTimeout(_highlightTimer);
+    _highlightTimer = setTimeout(() => {
+        _highlightTimer = null;
+        const rect = element.getBoundingClientRect();
+        highlight.style.display = 'block';
+        highlight.style.top    = (rect.top  - 6) + 'px';
+        highlight.style.left   = (rect.left - 6) + 'px';
+        highlight.style.width  = (rect.width  + 12) + 'px';
+        highlight.style.height = (rect.height + 12) + 'px';
+    }, 450);
+}
+
+function hideHighlight() {
+    if (_highlightTimer) { clearTimeout(_highlightTimer); _highlightTimer = null; }
+    const highlight = document.getElementById('tutorial-highlight');
+    if (highlight) highlight.style.display = 'none';
+}
+
+// ── positionBeacon — pulsing ring on the target button ────────────────────────
+let _beaconTimer = null; // track pending show-timer so hideBeacon can cancel it
+
+function positionBeacon(selector, labelText) {
+    const beacon  = document.getElementById('tutorial-beacon');
+    const labelEl = document.getElementById('tutorial-beacon-label');
+    if (!beacon) return;
+
+    const element = document.querySelector(selector);
+    if (!element) { hideBeacon(); return; }
+
+    if (labelEl) labelEl.textContent = labelText || 'Click here';
+
+    // Scroll the element into view inside any scrollable parent (e.g. properties window)
+    const findScrollParent = (el) => {
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+            if (node.scrollHeight > node.clientHeight + 2 &&
+                ['auto', 'scroll'].includes(getComputedStyle(node).overflowY)) return node;
+            node = node.parentElement;
         }
-        
-        // Wait a bit for scroll to complete, then highlight
-        setTimeout(() => {
-            const rect = element.getBoundingClientRect();
-            highlight.style.display = 'block';
-            highlight.style.top = (rect.top - 5) + 'px';
-            highlight.style.left = (rect.left - 5) + 'px';
-            highlight.style.width = (rect.width + 10) + 'px';
-            highlight.style.height = (rect.height + 10) + 'px';
-        }, 500);
+        return null;
+    };
+    const sp = findScrollParent(element);
+    if (sp) {
+        const elOffsetTop = element.getBoundingClientRect().top - sp.getBoundingClientRect().top + sp.scrollTop;
+        sp.scrollTo({ top: elOffsetTop - sp.clientHeight / 2 + element.offsetHeight / 2, behavior: 'smooth' });
     } else {
-        highlight.style.display = 'none';
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    // Re-read position after scroll settles — store timer so hideBeacon can cancel it
+    if (_beaconTimer) clearTimeout(_beaconTimer);
+    _beaconTimer = setTimeout(() => {
+        _beaconTimer = null;
+        const rect = element.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) { hideBeacon(); return; }
+        beacon.style.display  = 'block';
+        beacon.style.position = 'fixed';
+        beacon.style.top      = (rect.top  - 4) + 'px';
+        beacon.style.left     = (rect.left - 4) + 'px';
+        beacon.style.width    = (rect.width  + 8) + 'px';
+        beacon.style.height   = (rect.height + 8) + 'px';
+        beacon.style.zIndex   = '10002';
+        beacon.style.pointerEvents = 'none';
+    }, 650);
+}
+
+// ── hideBeacon ────────────────────────────────────────────────────────────────
+function hideBeacon() {
+    // Cancel any pending show-timer first so it can't re-show the beacon
+    if (_beaconTimer) { clearTimeout(_beaconTimer); _beaconTimer = null; }
+    const beacon = document.getElementById('tutorial-beacon');
+    if (beacon) beacon.style.display = 'none';
+}
+
+// ── runDemoStep — called by "▶ Run for me" button ─────────────────────────────
+function runDemoStep() {
+    const step = tutorialSteps[tutorialState.currentStep];
+    if (!step || !step.autoDemo || tutorialState.demoRunning) return;
+
+    tutorialState.demoRunning = true;
+
+    // Dim the tutorial panel so the user can watch the action in the sidebar/viewer
+    const guide = document.querySelector('.tutorial-guide-content');
+    if (guide) {
+        guide.style.transition = 'opacity 0.3s';
+        guide.style.opacity    = '0.25';
+        guide.style.pointerEvents = 'none';
+    }
+
+    // Flash the beacon to simulate a "click" on the target
+    const beacon = document.getElementById('tutorial-beacon');
+    if (beacon) {
+        beacon.style.background = 'rgba(102,126,234,0.25)';
+        setTimeout(() => { beacon.style.background = ''; }, 400);
+    }
+
+    // Execute the action
+    try {
+        step.autoDemo();
+    } catch (e) {
+        console.warn('Tutorial autoDemo error:', e);
+    }
+
+    // Restore tutorial panel after 3 s (pipeline step will auto-advance via advanceTutorialForPipelineAction)
+    setTimeout(() => {
+        tutorialState.demoRunning = false;
+        if (guide) {
+            guide.style.opacity = '';
+            guide.style.pointerEvents = '';
+        }
+    }, 3000);
+}
+
+// ── advanceTutorialForPipelineAction ──────────────────────────────────────────
+// Step layout:
+//   0  Welcome
+//   1  Load Candidates layer   (fileLoaded — handled in selectFile)
+//   2  Pipeline overview
+//   3  Featurization           (calculateFeatures)
+//   4  BKAFI                   (runBKAFI)
+//   5  Classifier              (viewResults)
+//   6  Zoom + marker on example building
+//   7  Load Index layer + dim
+//   8  Click building          (buildingClicked — handled in showBuildingProperties)
+//   9  Building Properties: Stage 1 features
+//  10  Building Properties: Stage 2 pairs  (pairsOpened — handled in openBkafiComparisonWindow)
+//  11  Comparison view explanation
+//  12  Reveal Model's Answer
+//  13  Show Matches on Map
+//  14  True match result
+//  15  Full classification map
+//  16  False positive example — fly + arrows
+//  17  False positive — open building properties
+//  18  False positive pairs view
+//  19  Summary
+function advanceTutorialForPipelineAction(actionType) {
+    if (tutorialState.completed) return;
+
+    const actionStepMap = {
+        'calculateFeatures': 3,
+        'runBKAFI':          4,
+        'viewResults':       5
+    };
+
+    if (actionType === 'calculateFeatures') tutorialState.featuresCalculated = true;
+    if (actionType === 'runBKAFI')          tutorialState.bkafiRun           = true;
+    if (actionType === 'viewResults')       tutorialState.classifierRun      = true;
+
+    const targetStep = actionStepMap[actionType];
+    if (targetStep !== undefined && tutorialState.currentStep === targetStep) {
+        setTimeout(() => {
+            const guide = document.querySelector('.tutorial-guide-content');
+            if (guide) { guide.style.opacity = ''; guide.style.pointerEvents = ''; }
+            tutorialState.demoRunning = false;
+            if (tutorialState.currentStep === targetStep) nextTutorialStep();
+        }, 1500);
     }
 }
 
-// Next tutorial step
+// ── nextTutorialStep ──────────────────────────────────────────────────────────
 function nextTutorialStep() {
+    hideBeacon();
     if (tutorialState.currentStep < tutorialSteps.length - 1) {
         tutorialState.currentStep++;
         updateTutorialStep();
@@ -523,63 +1122,52 @@ function nextTutorialStep() {
     }
 }
 
-// Previous tutorial step
+// ── prevTutorialStep ──────────────────────────────────────────────────────────
 function prevTutorialStep() {
+    hideBeacon();
     if (tutorialState.currentStep > 0) {
         tutorialState.currentStep--;
         updateTutorialStep();
     }
 }
 
-// Skip tutorial
+// ── skipTutorial ──────────────────────────────────────────────────────────────
 function skipTutorial() {
-    const dontShowAgain = confirm('Skip the tutorial? You can always access it again by refreshing the page.');
-    if (dontShowAgain) {
+    if (confirm('Skip the tutorial? You can always reopen it with the 📖 Tutorial button.')) {
         localStorage.setItem('3dSAGER_dontShowTutorial', 'true');
+        closeTutorialGuide();
     }
-    closeTutorialGuide();
 }
 
-// Hide tutorial temporarily (user can bring it back)
+// ── hideTutorialForNow — "Try it myself" hides the panel without completing ───
 function hideTutorialForNow() {
     const tutorialGuide = document.getElementById('tutorial-guide');
-    const highlight = document.getElementById('tutorial-highlight');
-    if (tutorialGuide) {
-        tutorialGuide.style.display = 'none';
-    }
-    if (highlight) {
-        highlight.style.display = 'none';
-    }
+    if (tutorialGuide) tutorialGuide.style.display = 'none';
+    hideHighlight();
+    hideBeacon();
+    removeTutorialMarker();
+    window.tutorialSuppressAutoFly = false;
     document.body.classList.remove('tutorial-open');
-    // Don't mark as completed - user can bring it back
 }
 
-// Helper function to advance tutorial when pipeline action is performed
-function advanceTutorialForPipelineAction(actionType) {
-    if (tutorialState.completed) return;
-    
-    // Advance if we're on step 3 (Run Pipeline Stages) or later
-    // Step 3 is index 2 (0-indexed)
-    if (tutorialState.currentStep === 2) {
-        // If on step 3 (pipeline stages), advance to step 4 after a short delay
-        setTimeout(() => {
-            if (tutorialState.currentStep === 2) {
-                nextTutorialStep();
-            }
-        }, 1500);
-    }
+// ── restoreAndAdvanceTutorial — restores opacity then advances one step ───────
+// Used by action handlers (fileLoaded, buildingClicked, pairsOpened) so the
+// tutorial panel comes back before the next step is shown.
+function restoreAndAdvanceTutorial() {
+    const guide = document.querySelector('.tutorial-guide-content');
+    if (guide) { guide.style.opacity = ''; guide.style.pointerEvents = ''; }
+    tutorialState.demoRunning = false;
+    nextTutorialStep();
 }
 
-// Close tutorial permanently
+// ── closeTutorialGuide ────────────────────────────────────────────────────────
 function closeTutorialGuide() {
     const tutorialGuide = document.getElementById('tutorial-guide');
-    const highlight = document.getElementById('tutorial-highlight');
-    if (tutorialGuide) {
-        tutorialGuide.style.display = 'none';
-    }
-    if (highlight) {
-        highlight.style.display = 'none';
-    }
+    if (tutorialGuide) tutorialGuide.style.display = 'none';
+    hideHighlight();
+    hideBeacon();
+    removeTutorialMarker();
+    window.tutorialSuppressAutoFly = false;
     document.body.classList.remove('tutorial-open');
     tutorialState.completed = true;
 }
@@ -607,14 +1195,14 @@ function setupWelcomeGuideClickHandlers() {
 
 
 
-// Load data files from API and auto-load all layers into the viewer
+// Load data files from API — render layer list but do NOT auto-load.
+// Users (or the tutorial) must check the checkboxes to load layers.
 function loadDataFiles() {
     fetch('/api/data/files')
         .then(response => response.json())
         .then(data => {
             console.log('Files loaded:', data);
 
-            // Store full file list so the legend can show unloaded files too
             allAvailableFiles = {
                 A: data.source_a || [],
                 B: data.source_b || []
@@ -623,25 +1211,8 @@ function loadDataFiles() {
             renderFileList('A', data.source_a);
             renderFileList('B', data.source_b);
 
-            // Show the legend immediately with all files (all checked = will load)
+            // Show the legend with all files unchecked — user loads manually
             updateViewerLegend();
-
-            // Auto-load every available layer into the viewer.
-            // Source A is processed first so the pipeline-file auto-selection fires correctly.
-            const allFiles = [
-                ...data.source_a.map(f => ({ ...f, source: 'A' })),
-                ...data.source_b.map(f => ({ ...f, source: 'B' }))
-            ];
-            allFiles.forEach(f => {
-                if (!layerState[f.path] || !layerState[f.path].visible) {
-                    toggleLayer(f.path, f.source, true);
-                }
-            });
-
-            // Notify the backend which file is the active pipeline file.
-            if (data.source_a && data.source_a.length > 0 && !selectedFile) {
-                selectFile(data.source_a[0].path, 'A');
-            }
         })
         .catch(error => {
             console.error('Error loading files:', error);
@@ -745,9 +1316,12 @@ function toggleLayer(filePath, source, shouldShow) {
     if (shouldShow) {
         // Use the retry helper so the load works even when viewer isn't ready yet
         waitForViewerThenLoad(filePath, source);
-        // Auto-select first visible Source A file as the pipeline file
+        // When the first Source A layer is loaded, select it as the pipeline file.
+        // Call selectFile (not just setPipelineFile) so the backend is notified and the
+        // tutorial fileLoaded flag gets set.  selectFile guards against re-calling toggleLayer
+        // because layerState[filePath].visible is already true at this point.
         if (source === 'A' && !selectedFile) {
-            setPipelineFile(filePath);
+            selectFile(filePath, 'A');
         }
     } else {
         if (window.viewer && window.viewer.removeLayer) {
@@ -879,22 +1453,16 @@ function updateViewerLegend() {
             const cbTitle  = loaded ? 'Unload layer from viewer' : 'Load layer into viewer';
             const dimTitle = dimmed ? 'Restore full opacity'     : 'Dim layer';
 
-            // "ACTIVE" badge for the current pipeline layer;
-            // "Set Active" button for other loaded Source-A layers.
             const badge = isActive
                 ? '<span class="legend-active-tag">active</span>'
                 : '';
-            const activateBtn = (source === 'A' && loaded && !isActive)
-                ? `<button class="legend-activate-btn" onclick="selectFile('${safeFp}','A')" title="Set as active pipeline layer">Set active</button>`
-                : '';
 
             rows += `<div class="viewer-legend-row legend-layer-row${!loaded ? ' legend-row-unloaded' : ''}${isActive ? ' legend-row-active' : ''}" title="${name}">
-                <input type="checkbox" class="legend-layer-cb" ${loaded ? 'checked' : ''}
+                <input type="checkbox" class="legend-layer-cb" data-source="${source}" ${loaded ? 'checked' : ''}
                     onchange="toggleLayer('${safeFp}','${source}',this.checked)"
                     title="${cbTitle}">
                 <span class="viewer-legend-swatch" style="background:${color};opacity:${loaded ? 1 : 0.35};flex-shrink:0;"></span>
                 <span class="legend-layer-name">${name}${badge}</span>
-                ${activateBtn}
                 <button class="legend-dim-btn${dimmed ? ' btn-dimmed' : ''}" title="${dimTitle}"
                     onclick="toggleLayerDimmed('${safeFp}')" ${!loaded ? 'disabled' : ''}>◑</button>
                 <button class="legend-zoom-btn" title="Zoom to layer"
@@ -942,6 +1510,105 @@ function zoomToLayer(filePath) {
 // Legend is now a fixed panel column — minimize is handled by the column itself.
 function toggleLegendMinimize() { /* no-op: legend is now a sidebar panel */ }
 window.toggleLegendMinimize = toggleLegendMinimize;
+
+// Fly the Cesium camera to a specific building by ID
+function zoomToBuilding(buildingId) {
+    if (!window.viewer || !window.viewer.buildingEntities) return false;
+    // CityJSON ids may or may not carry the 'bag_' prefix — try both variants
+    const variants = [buildingId, buildingId.replace(/^bag_/, ''), 'bag_' + buildingId.replace(/^bag_/, '')];
+    for (const id of variants) {
+        const entities = window.viewer.buildingEntities.get(id);
+        if (entities && entities.length > 0) {
+            try {
+                window.viewer.viewer.flyTo(entities, {
+                    duration: 1.5,
+                    offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-45), 300)
+                });
+            } catch (_) { /* viewer may not be ready */ }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ── Tutorial building marker (Cesium label + arrow placed above the example building) ──
+let tutorialMarkerEntity = null;
+let tutorialMarkerArrow  = null;
+
+function addTutorialMarker(buildingId) {
+    removeTutorialMarker();
+    if (!window.viewer || !window.viewer.buildingEntities) return;
+    const variants = [buildingId, buildingId.replace(/^bag_/, ''), 'bag_' + buildingId.replace(/^bag_/, '')];
+    for (const id of variants) {
+        const entities = window.viewer.buildingEntities.get(id);
+        if (entities && entities.length > 0) {
+            const entity = entities[0];
+            try {
+                if (entity.polygon && entity.polygon.hierarchy) {
+                    const hier = entity.polygon.hierarchy.getValue
+                        ? entity.polygon.hierarchy.getValue(Cesium.JulianDate.now())
+                        : entity.polygon.hierarchy;
+                    if (hier && hier.positions && hier.positions.length > 0) {
+                        let sumX = 0, sumY = 0, sumZ = 0;
+                        hier.positions.forEach(p => { sumX += p.x; sumY += p.y; sumZ += p.z; });
+                        const n = hier.positions.length;
+                        const center = new Cesium.Cartesian3(sumX / n, sumY / n, sumZ / n);
+                        const carto = Cesium.Cartographic.fromCartesian(center);
+
+                        const labelPos    = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height + 50);
+                        const arrowTipPos = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height + 4);
+                        const arrowColor  = Cesium.Color.fromCssColorString('#1a7aea');
+
+                        tutorialMarkerEntity = window.viewer.viewer.entities.add({
+                            position: labelPos,
+                            label: {
+                                text: 'Example building',
+                                font: 'bold 13px sans-serif',
+                                fillColor: Cesium.Color.WHITE,
+                                outlineColor: arrowColor,
+                                outlineWidth: 3,
+                                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                                showBackground: true,
+                                backgroundColor: arrowColor.withAlpha(0.85),
+                                backgroundPadding: new Cesium.Cartesian2(10, 5),
+                                pixelOffset: new Cesium.Cartesian2(0, 0),
+                                disableDepthTestDistance: Number.POSITIVE_INFINITY
+                            }
+                        });
+
+                        // Arrow polyline — arrowhead lands on the building roof
+                        tutorialMarkerArrow = window.viewer.viewer.entities.add({
+                            polyline: {
+                                positions: [labelPos, arrowTipPos],
+                                width: 10,
+                                material: new Cesium.PolylineArrowMaterialProperty(arrowColor.withAlpha(0.9)),
+                                depthFailMaterial: new Cesium.PolylineArrowMaterialProperty(arrowColor.withAlpha(0.4)),
+                                clampToGround: false
+                            }
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('addTutorialMarker error:', e);
+            }
+            return;
+        }
+    }
+}
+
+function removeTutorialMarker() {
+    if (window.viewer && window.viewer.viewer) {
+        if (tutorialMarkerEntity) {
+            try { window.viewer.viewer.entities.remove(tutorialMarkerEntity); } catch (_) {}
+            tutorialMarkerEntity = null;
+        }
+        if (tutorialMarkerArrow) {
+            try { window.viewer.viewer.entities.remove(tutorialMarkerArrow); } catch (_) {}
+            tutorialMarkerArrow = null;
+        }
+    }
+}
 
 function setActiveFileFromViewer(filePath) {
     if (!filePath) {
@@ -1002,26 +1669,13 @@ function selectFile(filePath, source) {
         if (data.success) {
             currentSessionId = data.session_id;
             
-            // Update tutorial state when file is loaded
+            // Update tutorial state when file is selected
             if (!tutorialState.completed) {
                 tutorialState.fileLoaded = true;
-                // Wait a bit for file to actually load, then update tutorial
-                setTimeout(() => {
-                    const step = tutorialSteps[tutorialState.currentStep];
-                    if (step && step.waitForAction === 'fileLoaded') {
-                        // Show Next button when action is completed
-                        const nextBtn = document.getElementById('tutorial-next-btn');
-                        const tryBtn = document.getElementById('tutorial-try-btn');
-                        if (nextBtn) {
-                            nextBtn.style.display = 'inline-block';
-                            nextBtn.textContent = 'Next';
-                            nextBtn.disabled = false;
-                        }
-                        if (tryBtn) {
-                            tryBtn.style.display = 'none';
-                        }
-                    }
-                }, 2000);
+                const step = tutorialSteps[tutorialState.currentStep];
+                if (step && step.waitForAction === 'fileLoaded') {
+                    setTimeout(restoreAndAdvanceTutorial, 1500);
+                }
             }
         } else {
             console.error('Error selecting file:', data.error);
@@ -1281,34 +1935,21 @@ function showBuildingProperties(buildingId, cityObject, options) {
     // Update tutorial state when building is clicked
     if (!tutorialState.completed) {
         tutorialState.buildingClicked = true;
-        // Update tutorial if waiting for this action
         const step = tutorialSteps[tutorialState.currentStep];
         if (step && step.waitForAction === 'buildingClicked') {
-            setTimeout(() => {
-                // Show Next button when action is completed
-                const nextBtn = document.getElementById('tutorial-next-btn');
-                const tryBtn = document.getElementById('tutorial-try-btn');
-                if (nextBtn) {
-                    nextBtn.style.display = 'inline-block';
-                    nextBtn.textContent = 'Next';
-                    nextBtn.disabled = false;
-                }
-                if (tryBtn) {
-                    tryBtn.style.display = 'none';
-                }
-            }, 500);
+            setTimeout(restoreAndAdvanceTutorial, 1000);
         }
     }
     selectedBuildingId = buildingId;
     selectedBuildingData = cityObject;
     
-    const propsWindow = document.getElementById('building-properties-window');
-    const propsNameEl = document.getElementById('building-props-name');
-    const propsIdEl = document.getElementById('building-props-id');
-    const propsListEl = document.getElementById('properties-list');
-    const calcBtn = document.getElementById('calc-features-btn');
-    const bkafiBtn = document.getElementById('run-bkafi-btn');
-    
+    const propsWindow      = document.getElementById('building-properties-window');
+    const propsNameEl      = document.getElementById('building-props-name');
+    const propsIdEl        = document.getElementById('building-props-id');
+    const propsListEl      = document.getElementById('properties-list');
+    const calcBtn          = document.getElementById('calc-features-btn');
+    const bkafiBtn         = document.getElementById('run-bkafi-btn');
+
     if (!propsWindow || !propsNameEl || !propsIdEl || !propsListEl) {
         console.error('Building properties window elements not found');
         return;
@@ -1337,10 +1978,8 @@ function showBuildingProperties(buildingId, cityObject, options) {
     propsListEl.innerHTML = '';
     
     // Hide BKAFI button initially
-    if (bkafiBtn) {
-        bkafiBtn.style.display = 'none';
-    }
-    
+    if (bkafiBtn) bkafiBtn.style.display = 'none';
+
     // Enable calculate features button (only if a candidates file is selected)
     // Pipeline steps only work with candidates files
     // Check if we have a selected candidates file (source A)
@@ -1766,12 +2405,16 @@ function loadBuildingBkafiPairs(buildingId) {
         return;
     }
     
-    // Check cache first
-    if (buildingBkafiCache[buildingId]) {
-        showBkafiPairs(buildingBkafiCache[buildingId]);
-        return;
+    // Check cache first (cache always stores the full API response object)
+    const cachedEntry = buildingBkafiCache[buildingId];
+    if (cachedEntry) {
+        const cachedPairs = Array.isArray(cachedEntry) ? cachedEntry : cachedEntry.pairs;
+        if (cachedPairs && cachedPairs.length > 0) {
+            showBkafiPairs(cachedPairs, buildingId);
+            return;
+        }
     }
-    
+
     // Load from API
     console.log('Fetching BKAFI pairs from API for building:', buildingId);
     fetch(`/api/building/bkafi/${buildingId}?file=${encodeURIComponent(selectedFile)}`)
@@ -1789,8 +2432,8 @@ function loadBuildingBkafiPairs(buildingId) {
             
             console.log('BKAFI pairs loaded successfully:', data.pairs.length, 'pairs');
             
-            // Cache the pairs
-            buildingBkafiCache[buildingId] = data.pairs;
+            // Cache the full response object
+            buildingBkafiCache[buildingId] = data;
             
             // Show pairs in properties window - pass the buildingId explicitly
             showBkafiPairs(data.pairs, buildingId);
@@ -1857,6 +2500,7 @@ function showBkafiPairs(pairs, buildingId = null) {
     // Add button to view pairs visually - use the building ID and pairs from this specific section
     const viewButton = document.createElement('button');
     viewButton.className = 'action-btn';
+    viewButton.id = 'tutorial-view-pairs-btn';  // used by tutorial beacon
     viewButton.style.marginTop = '15px';
     viewButton.style.width = '100%';
     viewButton.textContent = 'View Pairs Visually';
@@ -1903,6 +2547,7 @@ async function _fetchBuildingDataForComparison(buildingId) {
 function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
     return new Promise((resolve) => {
         if (!viewerEl) { resolve(null); return; }
+        // Use a CHILD wrapper so viewerEl's original ID stays intact for future lookups
         const containerId = `cv-${viewerType}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const vkey = `comparison-viewer-${viewerType}`;
         // Dispose previous viewer for this slot
@@ -1910,9 +2555,17 @@ function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
             try { window[vkey].dispose(); } catch (_) {}
             delete window[vkey];
         }
-        viewerEl.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#888;">Rendering…</div>';
-        viewerEl.id = containerId;
+        viewerEl.innerHTML = '';
         viewerEl.style.position = 'relative';
+        // Create an inner wrapper with the unique ID so the outer element keeps its stable ID
+        const wrapper = document.createElement('div');
+        wrapper.id = containerId;
+        wrapper.style.cssText = 'position:absolute;inset:0;';
+        const loadingMsg = document.createElement('div');
+        loadingMsg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#888;';
+        loadingMsg.textContent = 'Rendering…';
+        viewerEl.appendChild(loadingMsg);
+        viewerEl.appendChild(wrapper);
         const color = viewerType === 'candidate' ? 0x2196F3 : 0x8B0000;
         let viewer;
         try { viewer = new ThreeBuildingViewer(containerId, color); }
@@ -1925,8 +2578,7 @@ function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
                 clearInterval(check);
                 try { viewer.loadBuilding(cityJSON); } catch (_) {}
                 setTimeout(() => {
-                    const msg = viewerEl.querySelector('div');
-                    if (msg && !msg.querySelector('canvas')) msg.remove();
+                    if (loadingMsg.parentNode) loadingMsg.remove();
                     resolve(viewer);
                 }, 350);
             } else if (attempts > 40) {
@@ -1968,6 +2620,19 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
 
     const headerTitle = comparisonWindow.querySelector('.comparison-header h3');
     if (headerTitle) headerTitle.textContent = 'Find the Best Match 🎯';
+
+    // Hide any tutorial beacon/highlight — the comparison window covers the BPW spotlight
+    hideBeacon();
+    hideHighlight();
+
+    // Advance tutorial if waiting for pairs to be opened
+    if (!tutorialState.completed) {
+        tutorialState.pairsOpened = true;
+        const step = tutorialSteps[tutorialState.currentStep];
+        if (step && step.waitForAction === 'pairsOpened') {
+            setTimeout(restoreAndAdvanceTutorial, 1000);
+        }
+    }
 
     cleanupComparisonViewers();
 
@@ -2107,6 +2772,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         revealBtn.textContent = "Reveal Model's Answer";
         revealBtn.disabled = true;
         revealBtn.addEventListener('click', () => {
+            hideBeacon();
             const sp = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
             showClassifierResultsInComparisonWindow(
                 comparisonWindow.getAttribute('data-candidate-id'), sp, userGuess
@@ -2120,6 +2786,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         skipLink.textContent = 'Skip — just show results';
         skipLink.addEventListener('click', (e) => {
             e.preventDefault();
+            hideBeacon();
             const sp = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
             showClassifierResultsInComparisonWindow(
                 comparisonWindow.getAttribute('data-candidate-id'), sp, null
@@ -2670,11 +3337,13 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
                 bannerHtml = `The true match is Option ${truMatchIdx + 1}. You picked Option ${userGuess + 1}.`;
             }
         } else if (modelPickIdx !== null && userGuess === modelPickIdx) {
-            bannerClass = 'correct';
-            bannerHtml = `✓ You agreed with the model! Both picked Option ${userGuess + 1}.`;
-        } else if (modelPickIdx !== null) {
+            // No true match exists — both user and model picked the same option, but it's a false positive
             bannerClass = 'incorrect';
-            bannerHtml = `The model picked Option ${modelPickIdx + 1}. You picked Option ${userGuess + 1}.`;
+            bannerHtml = `You agreed with the model (both picked Option ${userGuess + 1}), but none of the pairs is the true match — this is a <strong>False Positive</strong>.`;
+        } else if (modelPickIdx !== null) {
+            // No true match exists — model picked one option, user picked a different one; both are wrong
+            bannerClass = 'incorrect';
+            bannerHtml = `The model predicted Option ${modelPickIdx + 1} (a False Positive). You picked Option ${userGuess + 1}. Neither is the true match.`;
         } else {
             bannerClass = 'no-pick';
             bannerHtml = `The model found no match. You picked Option ${userGuess + 1}.`;
@@ -2722,6 +3391,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
     backBtn.className = 'back-to-map-btn';
     backBtn.innerHTML = '🗺 Show Matches on Map';
     backBtn.addEventListener('click', () => {
+        hideBeacon();
         // Place markers FIRST (before closing, so viewer is still accessible)
         if (window.viewer && window.viewer.addBuildingMarkers) {
             const pcd = compWin ? (compWin._pairCityData || []) : [];
@@ -2858,8 +3528,11 @@ function viewResults() {
                 // Hide loading when color update completes
                 hideLoading();
                 
-                // Show results summary window
-                showClassifierResultsSummary(results);
+                // Show results summary window (suppress during tutorial)
+                const tutorialGuide = document.getElementById('tutorial-guide');
+                if (!tutorialGuide || tutorialGuide.style.display === 'none') {
+                    showClassifierResultsSummary(results);
+                }
             });
             
             stepBtn.textContent = 'Completed';

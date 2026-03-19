@@ -9,6 +9,7 @@ class ThreeBuildingViewer {
         this.buildingMesh = null;
         this.buildingColor = buildingColor; // Store color for building material
         this.isInitialized = false;
+        this._disposed = false; // flag to stop the RAF loop on dispose
         
         if (!this.container) {
             console.error('Three.js viewer container not found:', containerId);
@@ -139,6 +140,7 @@ class ThreeBuildingViewer {
     }
     
     animate() {
+        if (this._disposed) return; // stop the loop when viewer is disposed
         requestAnimationFrame(() => this.animate());
         
         if (this.controls) {
@@ -669,14 +671,24 @@ class ThreeBuildingViewer {
     }
     
     dispose() {
+        this._disposed = true; // stops the RAF animation loop immediately
+        this.isInitialized = false;
+        if (this.controls) {
+            try { this.controls.dispose(); } catch (_) {}
+        }
         if (this.buildingMesh) {
-            this.scene.remove(this.buildingMesh);
+            if (this.scene) this.scene.remove(this.buildingMesh);
             if (this.buildingMesh.geometry) this.buildingMesh.geometry.dispose();
             if (this.buildingMesh.material) this.buildingMesh.material.dispose();
         }
-        
         if (this.renderer) {
             this.renderer.dispose();
+            // Force the browser to release the WebGL context immediately
+            const gl = this.renderer.getContext();
+            if (gl) {
+                const ext = gl.getExtension('WEBGL_lose_context');
+                if (ext) ext.loseContext();
+            }
         }
     }
 }

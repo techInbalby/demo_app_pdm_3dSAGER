@@ -253,8 +253,29 @@ class CesiumCityJSONViewer {
             const pickedObject = this.viewer.scene.pick(click.position);
             
             if (Cesium.defined(pickedObject) && pickedObject.id) {
-                // Building was clicked
                 const entity = pickedObject.id;
+
+                // ── Marker label clicked — fly to that building ───────────────
+                if (entity.markerBuildingId && entity.markerPosition) {
+                    this.viewer.camera.flyTo({
+                        destination: entity.markerPosition,
+                        orientation: {
+                            heading: this.viewer.camera.heading,
+                            pitch:   Cesium.Math.toRadians(-45),
+                            roll:    0,
+                        },
+                        offset: new Cesium.HeadingPitchRange(
+                            this.viewer.camera.heading,
+                            Cesium.Math.toRadians(-45),
+                            180
+                        ),
+                        duration: 1.4,
+                        easingFunction: Cesium.EasingFunction.QUARTIC_IN_OUT,
+                    });
+                    return;
+                }
+
+                // Building was clicked
                 const buildingId = entity.buildingId;
                 // Find all entities at this building (same ID from different layers/sources)
                 const allEntities = this._findEntitiesById(buildingId) || [];
@@ -287,6 +308,7 @@ class CesiumCityJSONViewer {
             const pickedObject = this.viewer.scene.pick(movement.endPosition);
             
             if (Cesium.defined(pickedObject) && pickedObject.id) {
+                // Show a pointer for both buildings and clickable markers
                 this.viewer.canvas.style.cursor = 'pointer';
             } else {
                 this.viewer.canvas.style.cursor = 'default';
@@ -1478,6 +1500,9 @@ class CesiumCityJSONViewer {
     }
 
     fitCameraToBuildings() {
+        // Suppress auto-fly during tutorial steps that have their own camera control
+        if (window.tutorialSuppressAutoFly) return;
+
         // Get all building entities
         const entities = [];
         this.buildingEntities.forEach(entityArray => {
@@ -1802,88 +1827,124 @@ class CesiumCityJSONViewer {
         if (!this.viewer) return;
         this.buildingMarkers = [];
 
-        // ── Build label/color info for each building ──────────────────────────
+        // Lift a Cartesian3 position by N metres above the ground
+        const elevate = (pos, metres) => {
+            try {
+                const c = Cesium.Cartographic.fromCartesian(pos);
+                c.height += metres;
+                return Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height);
+            } catch (_) { return pos; }
+        };
+
+        // ── Label / colour info — NO emoji (they corrupt in WebGL canvas) ─────
         const info = {};
         info[candidateId] = {
-            text: '▶ Candidate',
-            bg:   Cesium.Color.fromCssColorString('#1e88e5').withAlpha(0.92),
-            line: null
+            text:       'Candidate',
+            bg:         Cesium.Color.fromCssColorString('#1565c0').withAlpha(0.92),
+            lineColor:  null,
+            liftMetres: 35,
         };
-        (pairs || []).forEach(pair => {
+        (pairs || []).forEach((pair, idx) => {
             const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
             const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
-            let text, bg, arrowColor;
+            let text, bg, lineColor;
             if (tl === 1) {
-                text = '✓ True Match';       bg = Cesium.Color.fromCssColorString('#16a34a').withAlpha(0.92); arrowColor = Cesium.Color.fromCssColorString('#22c55e').withAlpha(0.85);
+                text      = 'True Match';
+                bg        = Cesium.Color.fromCssColorString('#15803d').withAlpha(0.92);
+                lineColor = Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.9);
             } else if (pred === 1 && tl === 0) {
-                text = '⚠ False Positive';   bg = Cesium.Color.fromCssColorString('#ea580c').withAlpha(0.92); arrowColor = Cesium.Color.fromCssColorString('#f97316').withAlpha(0.85);
+                text      = 'False Positive';
+                bg        = Cesium.Color.fromCssColorString('#b45309').withAlpha(0.92);
+                lineColor = Cesium.Color.fromCssColorString('#fbbf24').withAlpha(0.9);
             } else {
-                text = '✗ No Match';         bg = Cesium.Color.fromCssColorString('#64748b').withAlpha(0.85); arrowColor = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.7);
+                text      = 'No Match';
+                bg        = Cesium.Color.fromCssColorString('#1f2937').withAlpha(0.92);
+                lineColor = Cesium.Color.fromCssColorString('#6b7280').withAlpha(0.85);
             }
-            info[pair.index_id] = { text, bg, arrowColor };
+            // Stagger lift so co-located labels don't overlap
+            info[pair.index_id] = { text, bg, lineColor, liftMetres: 35 + idx * 22 };
         });
 
-        // ── Collect positions ─────────────────────────────────────────────────
-        // 1) From entities already in the Cesium viewer
-        const positions = {};
+        // ── Collect ground-level centroids ────────────────────────────────────
+        const groundPositions = {};
         this.layerEntities.forEach((entities) => {
             entities.forEach(entity => {
                 const bid = entity.buildingId;
-                if (bid && info[bid] && !positions[bid]) {
+                if (bid && info[bid] && !groundPositions[bid]) {
                     const pos = this._getEntityCentroid(entity);
-                    if (pos) positions[bid] = pos;
+                    if (pos) groundPositions[bid] = pos;
                 }
             });
         });
-
-        // 2) From raw cityJSON (pairs from Source B not loaded in the viewer)
         pairCityData.forEach(pcd => {
             if (!pcd) return;
             const bid = pcd.buildingId;
-            if (bid && info[bid] && !positions[bid]) {
+            if (bid && info[bid] && !groundPositions[bid]) {
                 const pos = this._getCentroidFromCityJSON(pcd.cityJSON);
-                if (pos) positions[bid] = pos;
+                if (pos) groundPositions[bid] = pos;
             }
         });
 
-        const candidatePos = positions[candidateId];
+        const candidateGround = groundPositions[candidateId];
 
-        // ── Add a label pin for every building we have a position for ─────────
-        Object.entries(positions).forEach(([bid, pos]) => {
-            const { text, bg } = info[bid];
+        // ── Label pins — elevated above each building roof ────────────────────
+        Object.entries(groundPositions).forEach(([bid, groundPos]) => {
+            const { text, bg, liftMetres } = info[bid];
+            const labelPos = elevate(groundPos, liftMetres);
             const pin = this.viewer.entities.add({
-                position: pos,
+                position: labelPos,
                 label: {
                     text,
-                    font: 'bold 13px "Segoe UI", sans-serif',
-                    fillColor: Cesium.Color.WHITE,
-                    backgroundColor: bg,
-                    showBackground: true,
-                    backgroundPadding: new Cesium.Cartesian2(10, 6),
-                    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset: new Cesium.Cartesian2(0, -8),
+                    font:                     'bold 14px Arial, sans-serif',
+                    style:                    Cesium.LabelStyle.FILL,
+                    fillColor:                Cesium.Color.WHITE,
+                    backgroundColor:          bg,
+                    showBackground:           true,
+                    backgroundPadding:        new Cesium.Cartesian2(11, 7),
+                    horizontalOrigin:         Cesium.HorizontalOrigin.CENTER,
+                    verticalOrigin:           Cesium.VerticalOrigin.BOTTOM,
+                    pixelOffset:              new Cesium.Cartesian2(0, 0),
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                },
+            });
+            pin.markerBuildingId = bid;
+            pin.markerPosition   = labelPos;
+            this.buildingMarkers.push(pin);
+
+            // Vertical stem from near-ground (–28 m reverses the +30 already in groundPos)
+            // up to the label, so the line visually touches the building roof
+            const buildingBase = elevate(groundPos, -26);
+            const stem = this.viewer.entities.add({
+                polyline: {
+                    positions:                [buildingBase, labelPos],
+                    width:                    2,
+                    material:                 bg.withAlpha(0.80),
+                    clampToGround:            false,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 }
             });
-            this.buildingMarkers.push(pin);
+            this.buildingMarkers.push(stem);
         });
 
-        // ── Draw arrow lines from candidate to each pair ──────────────────────
-        if (candidatePos) {
+        // ── Horizontal connector lines from candidate to each pair ────────────
+        if (candidateGround) {
             (pairs || []).forEach(pair => {
-                const pairPos = positions[pair.index_id];
-                if (!pairPos) return;
-                const { arrowColor } = info[pair.index_id];
-                const arrow = this.viewer.entities.add({
+                const pairGround = groundPositions[pair.index_id];
+                if (!pairGround) return;
+                const { lineColor, liftMetres } = info[pair.index_id];
+                // Draw at the pair's label height for a clean horizontal look
+                const fromPos = elevate(candidateGround, liftMetres);
+                const toPos   = elevate(pairGround,      liftMetres);
+                const line = this.viewer.entities.add({
                     polyline: {
-                        positions: [candidatePos, pairPos],
-                        width: 5,
-                        material: new Cesium.PolylineArrowMaterialProperty(arrowColor),
+                        positions: [fromPos, toPos],
+                        width:     3,
+                        material:  new Cesium.PolylineArrowMaterialProperty(lineColor),
                         clampToGround: false,
+                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
                     }
                 });
-                this.buildingMarkers.push(arrow);
+                this.buildingMarkers.push(line);
             });
         }
 

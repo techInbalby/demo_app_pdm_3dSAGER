@@ -256,9 +256,10 @@
             <div class="tutorial-guide-footer">
                 <button class="action-btn secondary" id="tutorial-skip-btn" onclick="skipTutorial()" style="display: none;">Skip Tutorial</button>
                 <div class="tutorial-buttons">
-                    <button class="action-btn secondary" id="tutorial-prev-btn" onclick="prevTutorialStep()">Previous</button>
-                    <button class="action-btn primary" id="tutorial-try-btn" onclick="hideTutorialForNow()">Got it, let's try!</button>
-                    <button class="action-btn primary" id="tutorial-next-btn" onclick="nextTutorialStep()">Next</button>
+                    <button class="action-btn secondary" id="tutorial-prev-btn" onclick="prevTutorialStep()">← Prev</button>
+                    <button class="action-btn tutorial-demo-btn" id="tutorial-demo-btn" onclick="runDemoStep()" style="display:none;">▶ Run for me</button>
+                    <button class="action-btn secondary" id="tutorial-try-btn" onclick="hideTutorialForNow()" style="display:none;">Try it myself</button>
+                    <button class="action-btn primary" id="tutorial-next-btn" onclick="nextTutorialStep()">Next →</button>
                 </div>
             </div>
         </div>
@@ -266,6 +267,12 @@
     
     <!-- Tutorial Highlight Overlay (for highlighting UI elements) -->
     <div id="tutorial-highlight" class="tutorial-highlight" style="display: none;"></div>
+
+    <!-- Tutorial Beacon — pulsing pointer placed over target button -->
+    <div id="tutorial-beacon" style="display:none;">
+        <div class="tutorial-beacon-ring"></div>
+        <div class="tutorial-beacon-label" id="tutorial-beacon-label">Click here</div>
+    </div>
 
     <!-- Leaflet JS for location map -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
