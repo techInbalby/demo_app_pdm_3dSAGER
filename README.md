@@ -28,7 +28,6 @@ The 3dSAGER (3D Spatial Attribute-based Geospatial Entity Resolution) system is 
    - Clickable buildings with detailed information
    - Color-coded building status (matched, unmatched, true positive, false positive)
    - Building comparison viewer for candidate-index pairs
-   - Location map in sidebar (Leaflet) showing The Hague location
 
 3. **BKAFI Blocking Results**
    - Load and visualize pre-computed candidate pairs from BKAFI algorithm
@@ -133,7 +132,7 @@ The application will be available at `http://localhost:5001`
    - Check BKAFI blocking pairs
 
 3. **Load BKAFI Results** (Step 2)
-   - Click "Load BKAFI Results" to load pre-computed blocking results from JSON file
+   - Click "Run BKAFI" to load pre-computed blocking results from JSON file
    - View candidate pairs for each building (pre-computed by the BKAFI algorithm)
    - Click "View Pairs Visually" to see side-by-side comparison
 
@@ -202,6 +201,7 @@ demo_app_3dSAGER/
 
 - `GET /api/data/files` - Get list of available CityJSON files
 - `GET /api/data/file/<path:file_path>` - Get CityJSON file content
+- `GET /api/data/file` - Get CityJSON file content (query-param variant)
 - `POST /api/data/select` - Select a file for processing
 
 ### Building Operations
@@ -212,14 +212,28 @@ demo_app_3dSAGER/
 - `GET /api/building/bkafi/<building_id>?file=<file_path>` - Get BKAFI pairs for a building
 - `GET /api/building/matches/<building_id>?file=<file_path>` - Get matching results for a building
 
+### Feature Calculation
+
+- `POST /api/features/calculate` - Trigger geometric feature calculation for a file
+- `GET /api/features/result` - Poll for feature calculation result
+
 ### BKAFI Blocking Results
 
 - `POST /api/bkafi/load` - Load pre-computed BKAFI blocking results from JSON file
+- `GET /api/bkafi/result` - Poll for BKAFI load result
 
 ### Matching and Metrics
 
 - `GET /api/classifier/summary?file=<file_path>` - Get classifier performance summary
 - `GET /api/buildings/status?file=<file_path>` - Get match status for all buildings in a file
+
+### Jobs
+
+- `GET /api/jobs/<task_id>` - Poll status of a background task (Celery)
+
+### Health
+
+- `GET /health` - Application health check
 
 ## Configuration
 
@@ -253,7 +267,7 @@ The application supports CityJSON files in various coordinate reference systems:
 
 The Cesium viewer automatically handles coordinate transformations using proj4js.
 
-**Note**: The Cesium viewer does not display a base map. Buildings are displayed on a plain background. A small location map (Leaflet) is available in the sidebar showing The Hague location.
+**Note**: The Cesium viewer does not display a base map. Buildings are displayed on a plain background.
 
 ### Confidence Threshold
 
@@ -388,9 +402,19 @@ python -m pytest tests/
 ### Python Packages
 
 - Flask 3.0.0 - Web framework
+- Werkzeug 3.0.1 - WSGI utilities (Flask dependency)
 - pandas 2.1.4 - Data processing (for reading results)
 - numpy 1.24.3 - Numerical computing
+- scipy 1.11.4 - Scientific computing
 - joblib 1.3.2 - Loading geometric features from joblib files
+- Flask-Compress 1.14 - Automatic gzip compression for API responses
+- gunicorn - Production WSGI server
+- celery - Asynchronous task queue (background jobs)
+- redis - Message broker for Celery
+- pyproj - Coordinate reference system transformations (build-time)
+- pyarrow - Columnar data format support
+- requests 2.31.0 - HTTP client
+- python-dotenv 1.0.0 - Environment variable management
 
 **Note**: XGBoost and scikit-learn are listed in requirements.txt but are **not used** in this demo application. This app only visualizes pre-computed results. The 3dSAGER pipeline uses these libraries for training and inference.
 
