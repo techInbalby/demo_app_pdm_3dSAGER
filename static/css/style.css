@@ -69,7 +69,7 @@ p {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 2rem 0;
+  padding: 6rem 0 4rem;
 }
 
 .hero-content {
@@ -379,6 +379,174 @@ p {
   .hero-buttons .btn {
     width: 100%;
     max-width: 300px;
+  }
+}
+
+/* Hero figure (Figure 1 below hero text) */
+.hero-figure {
+  margin: 3rem auto 0;
+  max-width: 860px;
+  text-align: center;
+}
+
+.hero-figure-img {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.hero-figure figcaption {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Feature cards with images */
+.feature-card {
+  text-align: left;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.feature-card-img {
+  width: 100%;
+  height: 200px;
+  object-fit: contain;
+  background: #f8fafc;
+  border-radius: 16px 16px 0 0;
+  display: block;
+  padding: 12px;
+}
+
+.feature-card h3,
+.feature-card p {
+  padding: 0 1.5rem;
+}
+
+.feature-card h3 {
+  padding-top: 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.feature-card p {
+  padding-bottom: 1.5rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.feature-card-no-img {
+  padding: 1.5rem;
+}
+
+.feature-card-no-img h3,
+.feature-card-no-img p {
+  padding: 0;
+}
+
+.feature-card-no-img h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0;
+}
+
+.feature-card-no-img p {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Pipeline section */
+.pipeline-section {
+  padding: 4rem 0;
+}
+
+.pipeline-figure {
+  text-align: center;
+  margin: 0 0 2.5rem;
+}
+
+.pipeline-figure-img {
+  width: 100%;
+  max-width: 780px;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.pipeline-figure figcaption {
+  margin-top: 0.6rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.pipeline-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.pipeline-stage {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+}
+
+.pipeline-stage-number {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+  color: white;
+  font-weight: 700;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipeline-stage-text h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  color: var(--text);
+}
+
+.pipeline-stage-text p {
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+/* 2x2 grid for feature cards (with images they need more room) */
+.features-grid {
+  grid-template-columns: repeat(2, 1fr) !important;
+}
+
+@media (max-width: 768px) {
+  .features-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .hero-figure {
+    margin-top: 2rem;
+  }
+
+  .pipeline-stage {
+    flex-direction: column;
   }
 }
 

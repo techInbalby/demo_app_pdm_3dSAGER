@@ -62,23 +62,23 @@ const tutorialSteps = [
         title: "Welcome to 3dSAGER",
         content: `
             <div class="tutorial-step-content">
-                <p class="tutorial-intro"><strong>3dSAGER</strong> identifies whether a building in dataset A has a matching counterpart in dataset B for every building, in 3D, at scale.</p>
+                <p class="tutorial-intro">Two cities can map the same building independently, using different surveys, different coordinate systems, and no shared identifiers. <strong>3dSAGER</strong> determines, for each building in one dataset, which building in the other dataset represents the same real-world structure. It does this using 3D shape alone.</p>
                 <p>This walkthrough runs the full pipeline on two real buildings from The Hague:</p>
                 <div class="tutorial-example-buildings">
                     <div class="tutorial-building-card tutorial-building-true">
-                        <span class="tutorial-building-icon">✅</span>
+                        <span class="tutorial-tag tutorial-tag-match">Match</span>
                         <div>
                             <strong>True Match</strong><br>
                             <code>bag_0518100000279594</code><br>
-                            <small>90.44 % confidence : correctly identified</small>
+                            <small>90.44% confidence — correctly identified</small>
                         </div>
                     </div>
                     <div class="tutorial-building-card tutorial-building-false">
-                        <span class="tutorial-building-icon">⚠️</span>
+                        <span class="tutorial-tag tutorial-tag-fp">False Positive</span>
                         <div>
                             <strong>False Positive</strong><br>
                             <code>bag_0518100000316711</code><br>
-                            <small>57.67 % confidence : incorrect match</small>
+                            <small>57.67% confidence — incorrect match</small>
                         </div>
                     </div>
                 </div>
@@ -96,6 +96,7 @@ const tutorialSteps = [
         title: "Load the City Data",
         content: `
             <div class="tutorial-step-content">
+                <p>The <strong>Candidates (A)</strong> dataset contains the buildings whose matches we want to find. The <strong>Index (B)</strong> dataset is the reference we search through. Start by loading the Candidates layer.</p>
                 <p>In the <strong>Layers</strong> panel, enable the checkbox next to <strong>TheHague3D_Batch_07_Loosduinen_2022-08-08.json</strong> to load the Candidates dataset.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
@@ -119,12 +120,12 @@ const tutorialSteps = [
         title: "The 3dSAGER Pipeline",
         content: `
             <div class="tutorial-step-content">
-                <p>The three pipeline stages are now active in the sidebar. Each stage updates building colours in the viewer:</p>
+                <p>The pipeline converts raw 3D shapes into a match or no-match decision for every building, in three stages. Building colours update at each stage so you can track progress in the 3D viewer.</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start">
                     <div><span class="tutorial-swatch" style="background:rgb(116,151,223)"></span>&nbsp;<strong>Blue</strong> — loaded, no features yet</div>
                     <div><span class="tutorial-swatch" style="background:rgb(255,152,0)"></span>&nbsp;<strong>Orange</strong> — geometric features calculated (Stage 1)</div>
                     <div><span class="tutorial-swatch" style="background:rgb(255,235,59)"></span>&nbsp;<strong>Yellow</strong> — candidate pairs generated (Stage 2)</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong>Green</strong> — true match (Stage 3)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong>Green</strong> — true match found (Stage 3)</div>
                     <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong>Red</strong> — false positive (Stage 3)</div>
                 </div>
             </div>
@@ -140,7 +141,7 @@ const tutorialSteps = [
         title: "Stage 1: Geometric Featurization",
         content: `
             <div class="tutorial-step-content">
-                <p>Shape-based features are extracted from every building: footprint area, height, perimeter, compactness, and vertex count. These form the numeric fingerprint used by the classifier.</p>
+                <p>Raw 3D coordinates cannot be directly compared by a machine-learning model. Each building is first summarised into a small set of geometric measurements — its <strong>shape fingerprint</strong>. The measurements include footprint area, height, perimeter, compactness, and vertex count.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"Calculate Features"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
@@ -163,7 +164,7 @@ const tutorialSteps = [
         title: "Stage 2: BKAFI Blocking",
         content: `
             <div class="tutorial-step-content">
-                <p><strong>BKAFI Blocking</strong> narrows the search space by selecting a short list of geometrically similar Index candidates for each building, avoiding an exhaustive pairwise comparison.</p>
+                <p>There are thousands of buildings in each dataset. Comparing every Candidate against every Index building would produce millions of pairs — too many for the classifier to handle. <strong>BKAFI</strong> reduces this by selecting a short list of the most geometrically similar Index buildings for each Candidate. Only these shortlisted pairs advance to Stage 3.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"Run BKAFI"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
@@ -186,9 +187,9 @@ const tutorialSteps = [
         title: "Stage 3: Matching Classifier",
         content: `
             <div class="tutorial-step-content">
-                <p>The <strong>Bagging Classifier</strong> scores every BKAFI candidate pair and assigns each building a final verdict.</p>
+                <p>A machine-learning model trained on known matches and non-matches scores each BKAFI candidate pair. It outputs a confidence value representing how likely the two buildings are the same real-world structure. Pairs above the decision threshold are labelled as matches.</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:10px">
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — true match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — match found</div>
                     <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive</div>
                     <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
                 </div>
@@ -214,12 +215,12 @@ const tutorialSteps = [
         title: "Example Building",
         content: `
             <div class="tutorial-step-content">
-                <p>The classifier has run, buildings are now coloured by result. The following building will be used as the <strong>True Match</strong> example for the rest of the walkthrough.</p>
+                <p>The classifier has run and every building is now colour-coded by result. The following building will be used as the confirmed match example for the rest of the walkthrough.</p>
                 <div class="tutorial-building-card tutorial-building-true" style="margin-bottom:12px">
-                    <span class="tutorial-building-icon">📍</span>
+                    <span class="tutorial-tag tutorial-tag-match">Match</span>
                     <div>
                         <strong>bag_0518100000279594</strong><br>
-                        <small>True Match example</small>
+                        <small>True match example</small>
                     </div>
                 </div>
                 <div class="tutorial-action-row">
@@ -302,7 +303,7 @@ const tutorialSteps = [
         title: "Building Properties: Stage 1 Features",
         content: `
             <div class="tutorial-step-content">
-                <p>Scroll to the <strong>Geometric Features</strong> section at the bottom of the panel:</p>
+                <p>Scroll to the <strong>Geometric Features</strong> section at the bottom of the panel. These five measurements form the building's shape fingerprint:</p>
                 <ul class="tutorial-sublist">
                     <li><strong>Footprint Area</strong> — 2D outline area (m²)</li>
                     <li><strong>Height</strong> — ground to roof peak (m)</li>
@@ -310,7 +311,7 @@ const tutorialSteps = [
                     <li><strong>Compactness</strong> — circularity of the footprint (0–1)</li>
                     <li><strong>Vertices</strong> — number of outline points</li>
                 </ul>
-                <p>These values form the numeric fingerprint the classifier uses to score candidate pairs.</p>
+                <p>When two buildings from different datasets have closely aligned measurements, it is strong evidence they represent the same real-world structure. The classifier uses these values to score each candidate pair.</p>
             </div>
         `,
         highlight: null,
@@ -324,7 +325,7 @@ const tutorialSteps = [
         title: "Building Properties: Stage 2 Pairs",
         content: `
             <div class="tutorial-step-content">
-                <p>Scroll to the <strong>BKAFI Pairs</strong> section. It lists the Index candidates selected by BKAFI as likely matches. For <code>bag_0518100000279594</code>, there are 3 candidate pairs, only one is the true match.</p>
+                <p>Scroll to the <strong>BKAFI Pairs</strong> section. It lists the Index buildings that BKAFI selected as candidate matches for this building. For <code>bag_0518100000279594</code>, there are 3 candidate pairs, only one of which is the true match.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"View Pairs Visually"</strong> to open the 3D comparison, or press <strong>▶ Run for me</strong>.</div>
@@ -360,8 +361,8 @@ const tutorialSteps = [
         title: "The Pairs Comparison View",
         content: `
             <div class="tutorial-step-content">
-                <p>The side-by-side view shows the Candidate building on the left and one Index pair on the right. Use <strong>← →</strong> to cycle through all pairs.</p>
-                <p>Rotate, zoom, and pan each model independently. Browse all pairs and form your own guess before revealing the model's verdict.</p>
+                <p>The side-by-side view shows the Candidate building on the left and one Index candidate on the right. Use <strong>← →</strong> to cycle through all pairs. Rotate, zoom, and pan each model independently.</p>
+                <p>Browse all pairs and form your own assessment before revealing the classifier's verdict.</p>
             </div>
         `,
         highlight: null,
@@ -372,7 +373,7 @@ const tutorialSteps = [
 
     // ── 11: Explain Reveal Model's Answer ────────────────────────────────────
     {
-        title: "Reveal the Model's Answer",
+        title: "Reveal the Classifier's Answer",
         content: `
             <div class="tutorial-step-content">
                 <p>Click <strong>"Reveal Model's Answer"</strong> to display the classifier's verdict for each pair.</p>
@@ -381,8 +382,8 @@ const tutorialSteps = [
                     <div>The button is at the bottom of the comparison window. Press <strong>▶ Run for me</strong> to trigger it.</div>
                 </div>
                 <ul class="tutorial-sublist">
-                    <li><span style="color:#4caf50"><strong>MATCH</strong></span> : predicted to be the same building</li>
-                    <li><span style="color:#f44336"><strong>NO MATCH</strong></span> : predicted to be different</li>
+                    <li><span style="color:#4caf50"><strong>MATCH</strong></span> — predicted to be the same building</li>
+                    <li><span style="color:#f44336"><strong>NO MATCH</strong></span> — predicted to be different buildings</li>
                 </ul>
             </div>
         `,
@@ -422,17 +423,17 @@ const tutorialSteps = [
         content: `
             <div class="tutorial-step-content">
                 <div class="tutorial-building-card tutorial-building-true" style="margin-bottom:14px">
-                    <span class="tutorial-building-icon">🟢</span>
+                    <span class="tutorial-tag tutorial-tag-match">Match</span>
                     <div>
                         <strong>bag_0518100000279594</strong><br>
-                        <small>Confidence <strong>90.44 %</strong> · Predicted MATCH · True label MATCH</small>
+                        <small>Confidence <strong>90.44%</strong> · Predicted MATCH · Ground truth MATCH</small>
                     </div>
                 </div>
-                <p>The building is now <strong style="color:#4caf50">green</strong>, the classifier correctly identified its Index counterpart. All Candidate buildings have been scored:</p>
+                <p>The building is now <strong style="color:#4caf50">green</strong>. The classifier correctly identified its counterpart in the Index dataset. All Candidate buildings have been scored:</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin:10px 0 12px">
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> : true match found</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> : false positive</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> : no match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
                 </div>
                 <p>Press <strong>▶ Run for me</strong> to zoom out and see the full map, then press <strong>Next</strong> to inspect a false positive.</p>
             </div>
@@ -468,14 +469,14 @@ const tutorialSteps = [
         content: `
             <div class="tutorial-step-content">
                 <div class="tutorial-building-card tutorial-building-false" style="margin-bottom:14px">
-                    <span class="tutorial-building-icon">🔴</span>
+                    <span class="tutorial-tag tutorial-tag-fp">False Positive</span>
                     <div>
                         <strong>bag_0518100000316711</strong><br>
-                        <small>Confidence <strong>57.67 %</strong> · Predicted MATCH · True label NO MATCH</small>
+                        <small>Confidence <strong>57.67%</strong> · Predicted MATCH · Ground truth NO MATCH</small>
                     </div>
                 </div>
-                <p>This Candidate was matched to Index building <code>0518100000302961</code> at 57.67 % confidence, but ground truth confirms they are different buildings. Geometrically similar neighbours can mislead the classifier.</p>
-                <p>Press <strong>▶ Run for me</strong> to fly to the building and display candidate pair markers on the map.</p>
+                <p>A false positive is a case where the classifier predicted MATCH but the ground truth is NO MATCH. This building was matched to Index building <code>0518100000302961</code> at 57.67% confidence, but they are different real-world structures. Two buildings with very similar geometric measurements can mislead the classifier.</p>
+                <p>Press <strong>▶ Run for me</strong> to fly to the building and display its candidate pair markers on the map.</p>
             </div>
         `,
         highlight: null,
@@ -506,6 +507,7 @@ const tutorialSteps = [
 
                 // 3) Wait for the camera fly-to to finish before placing markers
                 await new Promise(r => setTimeout(r, 1800));
+                removeTutorialMarker();   // pair markers replace the "Example building" label
                 if (window.viewer && window.viewer.addBuildingMarkers) {
                     window.viewer.addBuildingMarkers(bId, pairs, pairCityData.filter(Boolean));
                 }
@@ -544,10 +546,10 @@ const tutorialSteps = [
                     <div class="tutorial-action-arrow">←</div>
                     <div>Press <strong>▶ Run for me</strong> to open the comparison window.</div>
                 </div>
-                <p>Browse the pairs with <strong>← →</strong> and reveal the model's answer. The matched pair is geometrically similar but refers to a different real-world building.</p>
+                <p>Browse the pairs with <strong>← →</strong> and reveal the classifier's answer. The matched pair is geometrically similar to the Candidate but refers to a different real-world building.</p>
             </div>
         `,
-        highlight: '#viewer',
+        highlight: '#building-properties-window',
         beaconSelector: '#tutorial-view-pairs-btn',
         waitForAction: false,
         autoDemo: async () => {
@@ -575,9 +577,10 @@ const tutorialSteps = [
         title: "Tutorial Complete",
         content: `
             <div class="tutorial-step-content">
-                <p>You have walked through the full <strong>3dSAGER pipeline</strong> using both a true match and a false positive from real data.</p>
+                <p>You have seen a complete run of the 3dSAGER pipeline: <strong>geometric featurization → BKAFI shortlisting → match classification</strong>. The city map is now colour-coded by result.</p>
+                <p>You walked through both a confirmed match and a false positive from real data.</p>
                 <div class="tutorial-tips">
-                    <h4>Explore further:</h4>
+                    <h4>Continue exploring:</h4>
                     <ul>
                         <li>Click any <span style="color:#4caf50"><strong>green</strong></span> building to inspect confirmed matches</li>
                         <li>Click any <span style="color:#f44336"><strong>red</strong></span> building to investigate false positives</li>
@@ -938,6 +941,10 @@ function updateTutorialStep() {
     // ── Pulsing beacon (button-level) ─────────────────────────────────────────
     if (step.beaconSelector) {
         positionBeacon(step.beaconSelector);
+        // Re-sync the highlight after the beacon's smooth-scroll settles (the
+        // smooth scrollIntoView on the beacon target can shift the sidebar by a
+        // few pixels, drifting the position:fixed highlight off its target).
+        if (step.highlight) setTimeout(() => highlightTutorialElement(step.highlight), 700);
     } else {
         hideBeacon();
     }
@@ -1015,7 +1022,7 @@ function scrollSidebarToElement(selector) {
     const elementHeight = element.offsetHeight;
     const target        = elementTop - (sidebarHeight / 2) + (elementHeight / 2);
 
-    sidebar.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    sidebar.scrollTop = Math.max(0, target);
 }
 
 // ── highlightTutorialElement — spotlight backdrop ─────────────────────────────
@@ -2017,7 +2024,7 @@ function loadFileInViewer(filePath) {
                 if (viewer) {
                     viewer.innerHTML = `
                         <div class="placeholder">
-                            <div class="placeholder-icon">⚠️</div>
+                            <div class="placeholder-icon">!</div>
                             <p>Error loading file: ${error.message}</p>
                         </div>
                     `;
@@ -2052,7 +2059,7 @@ function loadFileInViewer(filePath) {
                 }
                 viewer.innerHTML = `
                     <div class="placeholder">
-                        <div class="placeholder-icon">⚠️</div>
+                        <div class="placeholder-icon">!</div>
                         <p>${errorMsg}</p>
                         <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>
                     </div>
@@ -2181,9 +2188,6 @@ function calculateGeometricFeatures() {
         return;
     }
     
-    // Advance tutorial if active (when user clicks pipeline button)
-    advanceTutorialForPipelineAction('calculateFeatures');
-    
     // Can be called from sidebar button or building properties window
     const stepBtn = document.getElementById('step-btn-1');
     const calcBtn = document.getElementById('calc-features-btn');
@@ -2216,6 +2220,8 @@ function calculateGeometricFeatures() {
             if (step2Btn) step2Btn.disabled = false;
             stepBtn.textContent = 'Completed';
             stepBtn.style.background = '#28a745';
+            // Advance tutorial only after the UI is ready (button enabled, colors updating)
+            advanceTutorialForPipelineAction('calculateFeatures');
             updateBuildingColorsForStage1(true, function () {
                 clearSafety();
                 if (selectedBuildingId) updateSelectedBuildingColor();
@@ -2440,9 +2446,6 @@ function runBKAFI() {
     
     console.log('Loading BKAFI results');
     
-    // Advance tutorial if active
-    advanceTutorialForPipelineAction('runBKAFI');
-    
     const stepBtn = document.getElementById('step-btn-2');
     stepBtn.textContent = 'Loading...';
     stepBtn.disabled = true;
@@ -2467,6 +2470,8 @@ function runBKAFI() {
         
         stepBtn.textContent = 'Completed';
         stepBtn.style.background = '#28a745';
+        // Advance tutorial only after the UI is ready (step 3 enabled, colors updating)
+        advanceTutorialForPipelineAction('runBKAFI');
         
         // Update building colors based on BKAFI pairs (use cached data if available)
         updateBuildingColorsForStage2(true, () => {
@@ -2752,7 +2757,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     overlay.classList.add('active');
 
     const headerTitle = comparisonWindow.querySelector('.comparison-header h3');
-    if (headerTitle) headerTitle.textContent = 'Find the Best Match 🎯';
+    if (headerTitle) headerTitle.textContent = 'Find the Best Match';
 
     // Hide any tutorial beacon/highlight — the comparison window covers the BPW spotlight
     hideBeacon();
@@ -2993,7 +2998,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         } else if (pred === 1 && tl === 0) {
             card.classList.add('pair-result-false-positive');
             resultBadge.classList.add('false-pos');
-            resultBadge.textContent = '⚠ False Positive';
+            resultBadge.textContent = 'False Positive';
         } else if (tl === 1) {
             card.classList.add('pair-result-true');
             resultBadge.classList.add('true-match');
@@ -3523,6 +3528,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
         hideBeacon();
         // Place markers FIRST (before closing, so viewer is still accessible)
         if (window.viewer && window.viewer.addBuildingMarkers) {
+            removeTutorialMarker();   // pair markers replace the "Example building" label
             const pcd = compWin ? (compWin._pairCityData || []) : [];
             window.viewer.addBuildingMarkers(candidateBuildingId, pairsToShow, pcd);
         }
@@ -3602,9 +3608,6 @@ function viewResults() {
     
     console.log('Loading classifier results summary');
     
-    // Advance tutorial if active (when user clicks pipeline button)
-    advanceTutorialForPipelineAction('viewResults');
-    
     const stepBtn = document.getElementById('step-btn-3');
     stepBtn.textContent = 'Loading...';
     stepBtn.disabled = true;
@@ -3641,6 +3644,8 @@ function viewResults() {
             pipelineState.step3Completed = true;
             updatePipelineUI();
             updateViewerLegend();
+            // Advance tutorial only after the UI is ready (colors updating)
+            advanceTutorialForPipelineAction('viewResults');
             
             // Show summary button after Matching Classifier is completed
             const summaryBtn = document.getElementById('step-btn-3-summary');

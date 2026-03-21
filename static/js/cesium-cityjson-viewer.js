@@ -1836,34 +1836,83 @@ class CesiumCityJSONViewer {
             } catch (_) { return pos; }
         };
 
-        // ── Label / colour info — NO emoji (they corrupt in WebGL canvas) ─────
-        const info = {};
-        info[candidateId] = {
-            text:       'Candidate',
-            bg:         Cesium.Color.fromCssColorString('#1565c0').withAlpha(0.92),
-            lineColor:  null,
-            liftMetres: 35,
+        // ── SVG pin icon builder ──────────────────────────────────────────────
+        // Returns a data-URI for a clean circular pin (circle + bottom pointer).
+        // symbol: unicode string shown inside (e.g. '✓', '✕', 'C')
+        // bgHex:  CSS hex colour for the fill (e.g. '#15803d')
+        const makePinDataUrl = (symbol, bgHex) => {
+            const size = 44, r = 22, tailY = 54;
+            const svg = [
+                `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${tailY}">`,
+                `<defs><filter id="ds" x="-30%" y="-30%" width="160%" height="160%">`,
+                `<feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.35"/></filter></defs>`,
+                // circle body
+                `<circle cx="${r}" cy="${r}" r="${r - 2}" fill="${bgHex}" stroke="white" stroke-width="2.5" filter="url(#ds)"/>`,
+                // bottom pointer / tail
+                `<polygon points="${r - 8},${size - 3} ${r + 8},${size - 3} ${r},${tailY}" fill="${bgHex}"/>`,
+                // white border on tail sides to match circle stroke
+                `<line x1="${r - 8}" y1="${size - 3}" x2="${r}" y2="${tailY}" stroke="white" stroke-width="1.5"/>`,
+                `<line x1="${r + 8}" y1="${size - 3}" x2="${r}" y2="${tailY}" stroke="white" stroke-width="1.5"/>`,
+                // symbol text
+                `<text x="${r}" y="${r + 7}" text-anchor="middle" fill="white" `,
+                `font-size="18" font-weight="bold" font-family="Arial,sans-serif">${symbol}</text>`,
+                `</svg>`
+            ].join('');
+            return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
         };
+
+        // ── Label / colour info ───────────────────────────────────────────────
+        // Stack order (bottom → top): pair[n] … pair[0] … Candidate
+        // All pins are centered (pixelOffsetX: 0).
+        // Pair pins are on different buildings so only a small step is needed to
+        // separate labels when two pairs happen to be very close.
+        // The Candidate is fixed at 55 m — high enough to clear pair[0] at the
+        // same location (True Match case) but not so high it floats above the city.
+        const PAIR_BASE_LIFT = 55;   // metres for the first (lowest) pair
+        const PAIR_STEP      = 18;   // metres between consecutive pair pins
+        const CANDIDATE_LIFT = 100;  // fixed — independent of pair count
+
+        const info = {};
         (pairs || []).forEach((pair, idx) => {
             const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
             const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
-            let text, bg, lineColor;
+            let text, symbol, bgHex, bg, lineColor;
             if (tl === 1) {
                 text      = 'True Match';
-                bg        = Cesium.Color.fromCssColorString('#15803d').withAlpha(0.92);
+                symbol    = '\u2713';          // ✓
+                bgHex     = '#15803d';
+                bg        = Cesium.Color.fromCssColorString(bgHex).withAlpha(0.92);
                 lineColor = Cesium.Color.fromCssColorString('#4ade80').withAlpha(0.9);
             } else if (pred === 1 && tl === 0) {
                 text      = 'False Positive';
-                bg        = Cesium.Color.fromCssColorString('#b45309').withAlpha(0.92);
+                symbol    = '!';
+                bgHex     = '#b45309';
+                bg        = Cesium.Color.fromCssColorString(bgHex).withAlpha(0.92);
                 lineColor = Cesium.Color.fromCssColorString('#fbbf24').withAlpha(0.9);
             } else {
                 text      = 'No Match';
-                bg        = Cesium.Color.fromCssColorString('#1f2937').withAlpha(0.92);
+                symbol    = '\u2715';          // ✕
+                bgHex     = '#374151';
+                bg        = Cesium.Color.fromCssColorString(bgHex).withAlpha(0.92);
                 lineColor = Cesium.Color.fromCssColorString('#6b7280').withAlpha(0.85);
             }
-            // Stagger lift so co-located labels don't overlap
-            info[pair.index_id] = { text, bg, lineColor, liftMetres: 35 + idx * 22 };
+            info[pair.index_id] = {
+                text, symbol, bgHex, bg, lineColor,
+                liftMetres:   PAIR_BASE_LIFT + idx * PAIR_STEP,
+                pixelOffsetX: 0,
+            };
         });
+
+        // Candidate sits above the True Match (same building) at a fixed height
+        info[candidateId] = {
+            text:         'Candidate',
+            symbol:       'C',
+            bgHex:        '#1565c0',
+            bg:           Cesium.Color.fromCssColorString('#1565c0').withAlpha(0.92),
+            lineColor:    null,
+            liftMetres:   CANDIDATE_LIFT,
+            pixelOffsetX: 0,
+        };
 
         // ── Collect ground-level centroids ────────────────────────────────────
         const groundPositions = {};
@@ -1887,23 +1936,37 @@ class CesiumCityJSONViewer {
 
         const candidateGround = groundPositions[candidateId];
 
-        // ── Label pins — elevated above each building roof ────────────────────
+        // ── Pin markers — custom SVG circle pins + text label below ──────────
         Object.entries(groundPositions).forEach(([bid, groundPos]) => {
-            const { text, bg, liftMetres } = info[bid];
+            const { text, symbol, bgHex, bg, liftMetres, pixelOffsetX } = info[bid];
             const labelPos = elevate(groundPos, liftMetres);
+            const pinDataUrl = makePinDataUrl(symbol, bgHex);
+            const pinOffsetX = pixelOffsetX || 0;
+
             const pin = this.viewer.entities.add({
                 position: labelPos,
+                billboard: {
+                    image:                    pinDataUrl,
+                    verticalOrigin:           Cesium.VerticalOrigin.BOTTOM,
+                    horizontalOrigin:         Cesium.HorizontalOrigin.CENTER,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    scale:                    1.0,
+                    heightReference:          Cesium.HeightReference.NONE,
+                    pixelOffset:              new Cesium.Cartesian2(pinOffsetX, 0),
+                },
                 label: {
                     text,
-                    font:                     'bold 14px Arial, sans-serif',
-                    style:                    Cesium.LabelStyle.FILL,
+                    font:                     'bold 12px Arial, sans-serif',
+                    style:                    Cesium.LabelStyle.FILL_AND_OUTLINE,
                     fillColor:                Cesium.Color.WHITE,
-                    backgroundColor:          bg,
+                    outlineColor:             bg,
+                    outlineWidth:             2,
                     showBackground:           true,
-                    backgroundPadding:        new Cesium.Cartesian2(11, 7),
+                    backgroundColor:          bg.withAlpha(0.85),
+                    backgroundPadding:        new Cesium.Cartesian2(8, 4),
                     horizontalOrigin:         Cesium.HorizontalOrigin.CENTER,
-                    verticalOrigin:           Cesium.VerticalOrigin.BOTTOM,
-                    pixelOffset:              new Cesium.Cartesian2(0, 0),
+                    verticalOrigin:           Cesium.VerticalOrigin.TOP,
+                    pixelOffset:              new Cesium.Cartesian2(pinOffsetX, 6),
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 },
             });
