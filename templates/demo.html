@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3dSAGER Demo</title>
+    <title>Geospatial ER Demo</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/demo.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Cesium CSS -->
@@ -14,8 +14,9 @@
     <script src="https://cdn.jsdelivr.net/npm/proj4@2.9.0/dist/proj4.js"></script>
     <!-- Cesium JS -->
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
+    <meta id="cesium-config" data-token="{{ cesium_ion_token }}">
     <script>
-        window.CESIUM_ION_TOKEN = {{ cesium_ion_token | tojson }};
+        window.CESIUM_ION_TOKEN = document.getElementById('cesium-config').dataset.token;
     </script>
     <!-- Note: No Cesium Ion token needed - we're using ellipsoid terrain instead of world terrain -->
     <!-- This works perfectly for displaying CityJSON building models -->
@@ -36,12 +37,12 @@
                         📖 Tutorial
                     </button>
                 </div>
-                <h2>3dSAGER Pipeline</h2>
+                <h2>ER Pipeline</h2>
             </div>
 
             <div class="mobile-actions">
                 <button class="mobile-action-btn" data-target="viewer-section" data-title="3D Viewer">3D Viewer</button>
-                <button class="mobile-action-btn" data-target="pipeline-section" data-title="3dSAGER Pipeline">Pipeline Steps</button>
+                <button class="mobile-action-btn" data-target="pipeline-section" data-title="ER Pipeline">Pipeline Steps</button>
             </div>
             
             <!-- File Selection (hidden — layers are auto-loaded; DOM kept for JS compatibility) -->
@@ -56,7 +57,7 @@
             
             <!-- Pipeline Steps -->
             <div class="pipeline-steps" id="pipeline-section">
-                <h3>3dSAGER Pipeline</h3>
+                <h3>ER Pipeline</h3>
                 <div id="pipeline-active-file" class="pipeline-active-file" style="display:none;"></div>
                 <div class="step" id="step-1">
                     <div class="step-number">1</div>
@@ -72,9 +73,9 @@
                     <div class="step-number">2</div>
                     <div class="step-status"></div>
                     <div class="step-content">
-                        <h4>BKAFI Blocking</h4>
-                        <p>Run BKAFI model to generate candidate pairs</p>
-                        <button class="step-btn" id="step-btn-2" onclick="runBKAFI()" disabled>Run BKAFI</button>
+                        <h4>Geometric Blocking</h4>
+                        <p>Run blocking to generate candidate pairs</p>
+                        <button class="step-btn" id="step-btn-2" onclick="runBKAFI()" disabled>Run Blocking</button>
                     </div>
                 </div>
                 
@@ -88,22 +89,6 @@
                         <button class="step-btn" id="step-btn-3-summary" onclick="showSummaryFromStep3()" style="display: none; margin-top: 10px; background: #667eea;">Show Summary</button>
                     </div>
                 </div>
-            </div>
-            
-            <!-- 3dSAGER Repository Link -->
-            <div class="repository-link" id="repository-section">
-                <h3>About 3dSAGER</h3>
-                <p>
-                    This demo visualizes results from the 3dSAGER pipeline. For the full pipeline implementation, visit:
-                </p>
-                <a href="https://github.com/BarGenossar/3dSAGER" target="_blank" rel="noopener noreferrer">
-                    3dSAGER Repository
-                </a>
-                <p style="margin-top: 0.75rem;">
-                    <a href="https://arxiv.org/pdf/2511.06300" target="_blank" rel="noopener noreferrer">
-                        3dSAGER Technical Report
-                    </a>
-                </p>
             </div>
         </div>
         
@@ -159,7 +144,7 @@
             </div>
             <div class="properties-actions">
                 <button class="action-btn" id="calc-features-btn" onclick="calculateGeometricFeatures()" disabled>Calculate Geometric Features</button>
-                <button class="action-btn" id="run-bkafi-btn" onclick="runBKAFI()" disabled style="display: none; margin-top: 10px;">Run BKAFI</button>
+                <button class="action-btn" id="run-bkafi-btn" onclick="runBKAFI()" disabled style="display: none; margin-top: 10px;">Run Blocking</button>
             </div>
             <div class="properties-list" id="properties-list">
                 <!-- Geometric features will be populated here after calculation -->
@@ -200,7 +185,7 @@
     <!-- BKAFI Comparison Window -->
     <div id="bkafi-comparison-window" class="comparison-window" style="display: none;">
         <div class="comparison-header">
-            <h3>BKAFI Pairs Comparison</h3>
+            <h3>Blocking Pairs Comparison</h3>
             <button class="close-btn" onclick="closeBkafiComparisonWindow()">×</button>
         </div>
         <div class="comparison-content">
@@ -214,7 +199,7 @@
 
                 <!-- Right side: BKAFI pairs carousel -->
                 <div class="comparison-pairs-container">
-                    <div class="viewer-label">BKAFI Pairs</div>
+                    <div class="viewer-label">Blocking Pairs</div>
                     <div id="comparison-pairs-viewers" class="comparison-pairs-viewers">
                         <!-- Carousel card will be added here dynamically -->
                     </div>
@@ -239,7 +224,7 @@
     <div id="tutorial-guide" class="tutorial-guide-overlay" style="display: none;">
         <div class="tutorial-guide-content">
             <div class="tutorial-guide-header">
-                <h2 id="tutorial-title">Welcome to 3dSAGER Demo</h2>
+                <h2 id="tutorial-title">Welcome to the Demo</h2>
                 <button class="close-btn" onclick="hideTutorialForNow()">×</button>
             </div>
             <div class="tutorial-guide-body">

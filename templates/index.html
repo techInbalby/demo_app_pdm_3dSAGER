@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3dSAGER Demo</title>
-    <meta name="description" content="Interactive demonstration of the 3dSAGER pipeline for geospatial entity resolution over 3D objects">
+    <title>Geospatial Entity Resolution Demo</title>
+    <meta name="description" content="Interactive demonstration of a geospatial entity resolution pipeline over 3D city models for post-disaster management">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
@@ -13,11 +13,10 @@
     <nav class="navbar">
         <div class="container">
             <div class="navbar-content">
-                <a href="/" class="logo">3dSAGER Demo</a>
+                <a href="/" class="logo">Geospatial ER</a>
                 <ul class="nav-links">
                     <li><a href="#features">Features</a></li>
                     <li><a href="#pipeline">Pipeline</a></li>
-                    <li><a href="#about">About</a></li>
                     <li><a href="/demo" class="btn btn-primary">Try Demo</a></li>
                 </ul>
             </div>
@@ -28,24 +27,17 @@
     <section class="hero">
         <div class="container">
             <div class="hero-content fade-in-up">
-                <h1>3dSAGER</h1>
+                <h1>Geospatial Entity Resolution</h1>
                 <p class="hero-subtitle">
-                    Geospatial Entity Resolution over 3D Objects
+                    Coordinate-agnostic matching of 3D buildings across independent city datasets
                 </p>
                 <p class="hero-description">
-                    Cities are mapped by many independent sources: satellites, drones, and street cameras. Each source produces its own 3D model of the same buildings. 3dSAGER identifies which building in one dataset corresponds to the same real-world structure in another, using only 3D shape. No GPS coordinates or shared identifiers are required.
+                    When disaster strikes, emergency teams must align newly captured UAV imagery against existing 3D city models, often without reliable GPS or shared coordinates. This dashboard demonstrates a full entity resolution pipeline that matches buildings purely by geometric shape, giving first responders accurate situational awareness in damaged urban areas.
                 </p>
                 <div class="hero-buttons">
                     <a href="/demo" class="btn btn-primary">Launch Demo</a>
                     <a href="#features" class="btn btn-secondary">Learn More</a>
                 </div>
-
-                <figure class="hero-figure">
-                    <img src="{{ url_for('static', filename='images/matching-concept.png') }}"
-                         alt="A building from one dataset matched to the correct counterpart (checkmark) and distinguished from a non-matching building (cross)"
-                         class="hero-figure-img">
-                    <figcaption>Two 3D buildings from different datasets: the top pair represents the same real-world building (match), the bottom pair does not (non-match). 3dSAGER determines this from 3D shape alone.</figcaption>
-                </figure>
             </div>
         </div>
     </section>
@@ -60,12 +52,12 @@
                          alt="Two 3D buildings matched across datasets"
                          class="feature-card-img">
                     <h3>Matching Buildings Across Datasets</h3>
-                    <p>Two city surveys may model the same building independently, with no shared identifiers. 3dSAGER determines which record in one dataset refers to the same real-world structure in another, relying solely on the geometry of the 3D models.</p>
+                    <p>Two city surveys may model the same building independently, with no shared identifiers. The system determines which record in one dataset refers to the same real-world structure in another, relying solely on the geometry of the 3D models.</p>
                 </div>
 
                 <div class="card feature-card feature-card-no-img">
                     <h3>Works Without GPS or Shared Coordinates</h3>
-                    <p>When datasets originate from different sources, they often use incompatible coordinate systems. Traditional matching methods fail in these cases because they compare coordinates directly. 3dSAGER matches buildings purely by their 3D shape, so coordinate misalignment is not an obstacle.</p>
+                    <p>When datasets originate from different sources, they often use incompatible coordinate systems. Traditional matching methods fail in these cases because they compare coordinates directly. The pipeline matches buildings purely by their 3D shape, so coordinate misalignment is not an obstacle.</p>
                 </div>
 
                 <div class="card feature-card">
@@ -73,15 +65,15 @@
                          alt="3D viewer showing buildings colour-coded by match result"
                          class="feature-card-img">
                     <h3>Reads Full 3D Geometry</h3>
-                    <p>Buildings are stored as CityJSON files, a standard format for 3D city models. 3dSAGER processes the complete 3D surface geometry of each building rather than reducing it to a single point on a map, capturing shape details that a point representation would miss.</p>
+                    <p>Buildings are stored as CityJSON files, a standard format for 3D city models. The pipeline processes the complete 3D surface geometry of each building rather than reducing it to a single point on a map, capturing shape details that a point representation would miss.</p>
                 </div>
 
                 <div class="card feature-card">
                     <img src="{{ url_for('static', filename='images/bkafi-illustration.png') }}"
-                         alt="Figure 4: BKAFI nearest-neighbour search selecting candidate pairs from the Index dataset"
+                         alt="Geometric blocking: nearest-neighbour search selecting candidate pairs from the Index dataset"
                          class="feature-card-img">
                     <h3>Efficient Candidate Shortlisting</h3>
-                    <p>Comparing every building in one dataset against every building in another is not feasible at scale. The BKAFI method pre-selects a small set of geometrically similar candidates for each building, so the classifier processes only the most probable matches.</p>
+                    <p>Comparing every building in one dataset against every building in another is not feasible at scale. The blocking step pre-selects a small set of geometrically similar candidates for each building, so the classifier processes only the most probable matches.</p>
                 </div>
             </div>
         </div>
@@ -93,10 +85,10 @@
             <div class="card">
                 <h2 class="text-center mb-2">The Pipeline</h2>
                 <figure class="pipeline-figure">
-                    <img src="{{ url_for('static', filename='images/pipeline-overview.png') }}"
-                         alt="Schematic overview of the 3dSAGER pipeline showing training and inference stages"
+                    <img src="{{ url_for('static', filename='images/demo_pipeline_cropped.png') }}"
+                         alt="Coordinate-agnostic geospatial ER pipeline: training and inference over candidate and index datasets, with featurization, blocking, and matching"
                          class="pipeline-figure-img">
-                    <figcaption>Figure 3 from the 3dSAGER paper: schematic overview of the full pipeline.</figcaption>
+                    <figcaption>Coordinate-agnostic geospatial ER pipeline overview: training (top) and inference (bottom) over candidate and index datasets, with featurization, blocking, and matching.</figcaption>
                 </figure>
                 <div class="pipeline-stages">
                     <div class="pipeline-stage">
@@ -109,8 +101,8 @@
                     <div class="pipeline-stage">
                         <div class="pipeline-stage-number">2</div>
                         <div class="pipeline-stage-text">
-                            <h4>BKAFI Blocking</h4>
-                            <p>For each Candidate building, BKAFI selects a short list of the most geometrically similar buildings from the Index dataset. Only these candidate pairs proceed to the classifier, reducing the total number of comparisons from millions to a few per building.</p>
+                            <h4>Geometric Blocking</h4>
+                            <p>For each Candidate building, the blocking step selects a short list of the most geometrically similar buildings from the Index dataset. Only these candidate pairs proceed to the classifier, reducing the total number of comparisons from millions to a few per building.</p>
                         </div>
                     </div>
                     <div class="pipeline-stage">
@@ -125,39 +117,13 @@
         </div>
     </section>
 
-    <!-- About Section -->
-    <section id="about" class="about">
-        <div class="container">
-            <div class="card">
-                <h2 class="text-center mb-2">About 3dSAGER</h2>
-                <div class="about-content">
-                    <p>
-                        Urban environments are continuously mapped by satellites, UAVs, and street cameras. The growing availability of 3D geospatial data from multiple independent sources has created new challenges for integrating spatial information, both in urban planning and in disaster management.
-                    </p>
-                    <p>
-                        When a natural disaster strikes, emergency teams must rapidly align newly captured aerial imagery against existing city records, even when GPS is disrupted and the two datasets use incompatible coordinate systems. 3dSAGER addresses this by identifying matching buildings using only their 3D geometry, without relying on location metadata or shared identifiers. The pipeline is validated on a large real-world dataset of The Hague, Netherlands, demonstrating significant gains in accuracy and efficiency over coordinate-based baselines.
-                    </p>
-                    <p>
-                        3dSAGER is an end-to-end pipeline for geospatial entity resolution over 3D polygon mesh data. It introduces a spatial-reference-independent featurization mechanism and the BKAFI blocking method, which leverages feature importance scores to generate high-recall candidate sets.
-                    </p>
-
-                    <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(37, 99, 235, 0.15); font-size: 0.95rem;">
-                        <p><strong>Repository:</strong> <a href="https://github.com/BarGenossar/3dSAGER" target="_blank" rel="noopener noreferrer">3dSAGER on GitHub</a></p>
-                        <p><strong>Paper:</strong> <a href="https://arxiv.org/pdf/2511.06300" target="_blank" rel="noopener noreferrer">3dSAGER Technical Report (arXiv:2511.06300)</a></p>
-                        <p style="margin-bottom:0"><strong>Authors:</strong> Bar Genossar, Sagi Dalyot, Roee Shraga, Avigdor Gal</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <!-- CTA Section -->
     <section class="cta">
         <div class="container">
             <div class="card text-center">
                 <h2>Try the Demo</h2>
                 <p class="mb-2">
-                    Run the full 3dSAGER pipeline on real 3D building data from The Hague. The built-in tutorial guides you through each stage step by step.
+                    Run the full PDM pipeline on real 3D building data from The Hague. The tutorial guides you through the ER lifecycle, from raw data ingestion to visual verification of matches.
                 </p>
                 <a href="/demo" class="btn btn-primary">Launch Demo</a>
             </div>
@@ -168,7 +134,7 @@
     <footer class="footer">
         <div class="container">
             <div class="footer-content">
-                <p>&copy; 2026 3dSAGER Research Team. All rights reserved.</p>
+                <p>&copy; 2026 Research Team. All rights reserved.</p>
                 <p>Built for academic research and demonstration purposes.</p>
             </div>
         </div>

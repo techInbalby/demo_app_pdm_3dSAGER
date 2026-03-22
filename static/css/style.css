@@ -287,6 +287,20 @@ p {
 }
 
 /* Hero specific styles */
+.hero-label {
+  display: inline-block;
+  background: rgba(37, 99, 235, 0.10);
+  color: var(--primary);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  border-radius: 50px;
+  padding: 0.35rem 1.1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 1.25rem;
+}
+
 .hero-subtitle {
   font-size: 1.5rem;
   color: #2c3e50;

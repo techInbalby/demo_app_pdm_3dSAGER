@@ -59,10 +59,10 @@ const tutorialSteps = [
 
     // ── 0: Welcome ────────────────────────────────────────────────────────────
     {
-        title: "Welcome to 3dSAGER",
+        title: "Welcome to the Demo",
         content: `
             <div class="tutorial-step-content">
-                <p class="tutorial-intro">Two cities can map the same building independently, using different surveys, different coordinate systems, and no shared identifiers. <strong>3dSAGER</strong> determines, for each building in one dataset, which building in the other dataset represents the same real-world structure. It does this using 3D shape alone.</p>
+                <p class="tutorial-intro">In this demonstration you become a member of a <strong>PDM command team</strong>, going through the lifecycle of an entity resolution task — from raw data ingestion to visual verification of matches. The pipeline aligns UAV-acquired building data against existing city records using only 3D geometry, with no coordinates or shared identifiers required.</p>
                 <p>This walkthrough runs the full pipeline on two real buildings from The Hague:</p>
                 <div class="tutorial-example-buildings">
                     <div class="tutorial-building-card tutorial-building-true">
@@ -117,7 +117,7 @@ const tutorialSteps = [
 
     // ── 2: Pipeline overview / color legend ───────────────────────────────────
     {
-        title: "The 3dSAGER Pipeline",
+        title: "The ER Pipeline",
         content: `
             <div class="tutorial-step-content">
                 <p>The pipeline converts raw 3D shapes into a match or no-match decision for every building, in three stages. Building colours update at each stage so you can track progress in the 3D viewer.</p>
@@ -161,13 +161,13 @@ const tutorialSteps = [
 
     // ── 4: BKAFI Blocking ─────────────────────────────────────────────────────
     {
-        title: "Stage 2: BKAFI Blocking",
+        title: "Stage 2: Geometric Blocking",
         content: `
             <div class="tutorial-step-content">
-                <p>There are thousands of buildings in each dataset. Comparing every Candidate against every Index building would produce millions of pairs — too many for the classifier to handle. <strong>BKAFI</strong> reduces this by selecting a short list of the most geometrically similar Index buildings for each Candidate. Only these shortlisted pairs advance to Stage 3.</p>
+                <p>There are thousands of buildings in each dataset. Comparing every Candidate against every Index building would produce millions of pairs — too many for the classifier to handle. <strong>Geometric blocking</strong> reduces this by selecting a short list of the most geometrically similar Index buildings for each Candidate. Only these shortlisted pairs advance to Stage 3.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
-                    <div>Click <strong>"Run BKAFI"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
+                    <div>Click <strong>"Run Blocking"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
                 </div>
                 <div class="tutorial-color-legend">
                     <span class="tutorial-swatch" style="background:rgb(255,152,0)"></span> Orange
@@ -187,7 +187,7 @@ const tutorialSteps = [
         title: "Stage 3: Matching Classifier",
         content: `
             <div class="tutorial-step-content">
-                <p>A machine-learning model trained on known matches and non-matches scores each BKAFI candidate pair. It outputs a confidence value representing how likely the two buildings are the same real-world structure. Pairs above the decision threshold are labelled as matches.</p>
+                <p>A machine-learning model trained on known matches and non-matches scores each candidate pair. It outputs a confidence value representing how likely the two buildings are the same real-world structure. Pairs above the decision threshold are labelled as matches.</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:10px">
                     <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — match found</div>
                     <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive</div>
@@ -325,7 +325,7 @@ const tutorialSteps = [
         title: "Building Properties: Stage 2 Pairs",
         content: `
             <div class="tutorial-step-content">
-                <p>Scroll to the <strong>BKAFI Pairs</strong> section. It lists the Index buildings that BKAFI selected as candidate matches for this building. For <code>bag_0518100000279594</code>, there are 3 candidate pairs, only one of which is the true match.</p>
+                <p>Scroll to the <strong>Blocking Pairs</strong> section. It lists the Index buildings selected as candidate matches for this building. For <code>bag_0518100000279594</code>, there are 3 candidate pairs, only one of which is the true match.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"View Pairs Visually"</strong> to open the 3D comparison, or press <strong>▶ Run for me</strong>.</div>
@@ -541,7 +541,7 @@ const tutorialSteps = [
         title: "Inspect the False Positive Pairs",
         content: `
             <div class="tutorial-step-content">
-                <p>Scroll to the <strong>BKAFI Pairs</strong> section and open the visual comparison for <code>bag_0518100000316711</code>.</p>
+                <p>Scroll to the <strong>Blocking Pairs</strong> section and open the visual comparison for <code>bag_0518100000316711</code>.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Press <strong>▶ Run for me</strong> to open the comparison window.</div>
@@ -577,7 +577,7 @@ const tutorialSteps = [
         title: "Tutorial Complete",
         content: `
             <div class="tutorial-step-content">
-                <p>You have seen a complete run of the 3dSAGER pipeline: <strong>geometric featurization → BKAFI shortlisting → match classification</strong>. The city map is now colour-coded by result.</p>
+                <p>You have seen a complete run of the pipeline: <strong>geometric featurization → geometric blocking → match classification</strong>. The city map is now colour-coded by result.</p>
                 <p>You walked through both a confirmed match and a false positive from real data.</p>
                 <div class="tutorial-tips">
                     <h4>Continue exploring:</h4>
@@ -1653,7 +1653,7 @@ function updateViewerLegend() {
             html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,152,0);"></span>Has features</div>`;
         }
         if (anyALoaded && ps.step2Completed) {
-            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,235,59);"></span>Has BKAFI pairs</div>`;
+            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(255,235,59);"></span>Has blocking pairs</div>`;
         }
         if (anyALoaded && ps.step3Completed) {
             html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(76,175,80);"></span>True match</div>
@@ -1876,7 +1876,7 @@ function resetPipelineState() {
     }
     
     if (stepBtn2) {
-        stepBtn2.textContent = 'Run BKAFI';
+        stepBtn2.textContent = 'Run Blocking';
         stepBtn2.style.background = '#667eea';
         stepBtn2.disabled = true; // Disable until step 1 is completed
     }
@@ -1912,7 +1912,7 @@ function initLocationMap() {
         // Add marker for The Hague
         L.marker([52.0705, 4.3007])
             .addTo(locationMap)
-            .bindPopup('The Hague, Netherlands<br>3dSAGER Demo Location')
+            .bindPopup('The Hague, Netherlands<br>Demo Location')
             .openPopup();
         
         console.log('Location map initialized');
@@ -2427,11 +2427,11 @@ function showGeometricFeatures(features) {
         bkafiBtn.style.display = 'block';
         if (!pipelineState.step2Completed) {
             bkafiBtn.disabled = false;
-            bkafiBtn.textContent = 'Run BKAFI';
+            bkafiBtn.textContent = 'Run Blocking';
             bkafiBtn.style.background = '#667eea';
         } else {
             bkafiBtn.disabled = true;
-            bkafiBtn.textContent = 'BKAFI Completed';
+            bkafiBtn.textContent = 'Blocking Completed';
             bkafiBtn.style.background = '#28a745';
         }
     }
@@ -2487,7 +2487,7 @@ function runBKAFI() {
         const bkafiBtn = document.getElementById('run-bkafi-btn');
         if (bkafiBtn) {
             bkafiBtn.disabled = true;
-            bkafiBtn.textContent = 'BKAFI Completed';
+            bkafiBtn.textContent = 'Blocking Completed';
             bkafiBtn.style.background = '#28a745';
         }
         
@@ -2501,7 +2501,7 @@ function runBKAFI() {
         console.error('Error loading BKAFI results:', errorMessage);
         hideLoading();
         alert('Error loading BKAFI results: ' + errorMessage);
-        stepBtn.textContent = 'Run BKAFI';
+        stepBtn.textContent = 'Run Blocking';
         stepBtn.disabled = false;
     };
     
@@ -2611,7 +2611,7 @@ function showBkafiPairs(pairs, buildingId = null) {
     // Add separator and heading
     const separator = document.createElement('div');
     separator.className = 'property-separator';
-    separator.innerHTML = `<h4 style="margin: 0 0 15px 0; color: #667eea; font-size: 16px;">BKAFI Pairs (${pairs.length})</h4>`;
+    separator.innerHTML = `<h4 style="margin: 0 0 15px 0; color: #667eea; font-size: 16px;">Blocking Pairs (${pairs.length})</h4>`;
     bkafiContainer.appendChild(separator);
     
     // Add pairs (without prediction/true label - those will be shown after entity resolution)
@@ -3602,7 +3602,7 @@ function closeBkafiComparisonWindow() {
 // View results (Step 3) - Show summary instead of individual matches
 function viewResults() {
     if (!pipelineState.step2Completed) {
-        alert('Please complete BKAFI Blocking first.');
+        alert('Please complete Geometric Blocking first.');
         return;
     }
     
