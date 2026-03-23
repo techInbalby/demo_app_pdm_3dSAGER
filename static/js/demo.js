@@ -104,7 +104,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#legend-col',
+        highlight: null,
         beaconSelector: '#viewer-legend-items .legend-layer-cb',
         waitForAction: 'fileLoaded',
         autoDemo: () => {
@@ -153,7 +153,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#step-1',
+        highlight: null,
         beaconSelector: '#step-btn-1',
         waitForAction: 'calculateFeatures',
         autoDemo: () => { document.getElementById('step-btn-1').click(); }
@@ -176,7 +176,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#step-2',
+        highlight: null,
         beaconSelector: '#step-btn-2',
         waitForAction: 'runBKAFI',
         autoDemo: () => { document.getElementById('step-btn-2').click(); }
@@ -199,7 +199,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#step-3',
+        highlight: null,
         beaconSelector: '#step-btn-3',
         waitForAction: 'viewResults',
         autoDemo: () => {
@@ -229,7 +229,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#viewer',
+        highlight: null,
         beaconSelector: null,
         waitForAction: false,
         autoDemo: async () => {
@@ -253,7 +253,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: ['#legend-col', '#viewer'],
+        highlight: null,
         beaconSelector: '.legend-layer-cb[data-source="B"]',
         waitForAction: false,
         autoDemo: async () => {
@@ -270,8 +270,6 @@ const tutorialSteps = [
             // Re-zoom to the example building after loading may have triggered a camera fly-out
             zoomToBuilding('bag_0518100000279594');
             setTimeout(() => addTutorialMarker('bag_0518100000279594'), 800);
-            // Shift spotlight to show both legend and 3D viewer after load
-            highlightTutorialElement(['#legend-col', '#viewer']);
             // Show beacons on both dim buttons so the user knows how to compare layers
             setTimeout(() => positionBeaconMulti('.legend-dim-btn:not([disabled])', 'Try dimming'), 800);
         }
@@ -289,7 +287,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#viewer',
+        highlight: null,
         beaconSelector: '#viewer',
         waitForAction: 'buildingClicked',
         autoDemo: () => {
@@ -332,7 +330,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#building-properties-window',
+        highlight: null,
         beaconSelector: '#tutorial-view-pairs-btn',
         waitForAction: 'pairsOpened',
         advanceDelay: 3000,
@@ -527,7 +525,7 @@ const tutorialSteps = [
                 </div>
             </div>
         `,
-        highlight: '#viewer',
+        highlight: null,
         beaconSelector: '#viewer',
         waitForAction: 'buildingClicked',
         autoDemo: async () => {
@@ -549,8 +547,8 @@ const tutorialSteps = [
                 <p>Browse the pairs with <strong>← →</strong> and reveal the classifier's answer. The matched pair is geometrically similar to the Candidate but refers to a different real-world building.</p>
             </div>
         `,
-        highlight: '#building-properties-window',
-        beaconSelector: '#tutorial-view-pairs-btn',
+        highlight: null,
+        beaconSelector: null,
         waitForAction: false,
         autoDemo: async () => {
             const bId = 'bag_0518100000316711';
