@@ -62,7 +62,7 @@ const tutorialSteps = [
         title: "Welcome to the Demo",
         content: `
             <div class="tutorial-step-content">
-                <p class="tutorial-intro">In this demonstration you become a member of a <strong>PDM command team</strong>, going through the lifecycle of an entity resolution task — from raw data ingestion to visual verification of matches. The pipeline aligns UAV-acquired building data against existing city records using only 3D geometry, with no coordinates or shared identifiers required.</p>
+                <p class="tutorial-intro">In this demonstration you become a member of a <strong>PDM command team</strong>, going through the lifecycle of an entity resolution task, from raw data ingestion to visual verification of matches. The pipeline aligns UAV-acquired building data against existing city records using only 3D geometry, with no coordinates or shared identifiers required.</p>
                 <p>This walkthrough runs the full pipeline on two real buildings from The Hague:</p>
                 <div class="tutorial-example-buildings">
                     <div class="tutorial-building-card tutorial-building-true">
@@ -70,7 +70,7 @@ const tutorialSteps = [
                         <div>
                             <strong>True Match</strong><br>
                             <code>bag_0518100000279594</code><br>
-                            <small>90.44% confidence — correctly identified</small>
+                            <small>90.44% confidence, correctly identified</small>
                         </div>
                     </div>
                     <div class="tutorial-building-card tutorial-building-false">
@@ -78,7 +78,7 @@ const tutorialSteps = [
                         <div>
                             <strong>False Positive</strong><br>
                             <code>bag_0518100000316711</code><br>
-                            <small>57.67% confidence — incorrect match</small>
+                            <small>57.67% confidence, incorrect match</small>
                         </div>
                     </div>
                 </div>
@@ -122,11 +122,11 @@ const tutorialSteps = [
             <div class="tutorial-step-content">
                 <p>The pipeline converts raw 3D shapes into a match or no-match decision for every building, in three stages. Building colours update at each stage so you can track progress in the 3D viewer.</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start">
-                    <div><span class="tutorial-swatch" style="background:rgb(116,151,223)"></span>&nbsp;<strong>Blue</strong> — loaded, no features yet</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(255,152,0)"></span>&nbsp;<strong>Orange</strong> — geometric features calculated (Stage 1)</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(255,235,59)"></span>&nbsp;<strong>Yellow</strong> — candidate pairs generated (Stage 2)</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong>Green</strong> — true match found (Stage 3)</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong>Red</strong> — false positive (Stage 3)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(116,151,223)"></span>&nbsp;<strong>Blue</strong>: loaded, no features yet</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(255,152,0)"></span>&nbsp;<strong>Orange</strong>: geometric features calculated (Stage 1)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(255,235,59)"></span>&nbsp;<strong>Yellow</strong>: candidate pairs generated (Stage 2)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong>Green</strong>: true match found (Stage 3)</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong>Red</strong>: false positive (Stage 3)</div>
                 </div>
             </div>
         `,
@@ -141,7 +141,7 @@ const tutorialSteps = [
         title: "Stage 1: Geometric Featurization",
         content: `
             <div class="tutorial-step-content">
-                <p>Raw 3D coordinates cannot be directly compared by a machine-learning model. Each building is first summarised into a small set of geometric measurements — its <strong>shape fingerprint</strong>. The measurements include footprint area, height, perimeter, compactness, and vertex count.</p>
+                <p>Raw 3D coordinates cannot be directly compared by a machine-learning model. Each building is first summarised into a small set of geometric measurements, its <strong>shape fingerprint</strong>. The measurements include footprint area, height, perimeter, compactness, and vertex count.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"Calculate Features"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
@@ -164,7 +164,7 @@ const tutorialSteps = [
         title: "Stage 2: Geometric Blocking",
         content: `
             <div class="tutorial-step-content">
-                <p>There are thousands of buildings in each dataset. Comparing every Candidate against every Index building would produce millions of pairs — too many for the classifier to handle. <strong>Geometric blocking</strong> reduces this by selecting a short list of the most geometrically similar Index buildings for each Candidate. Only these shortlisted pairs advance to Stage 3.</p>
+                <p>There are thousands of buildings in each dataset. Comparing every Candidate against every Index building would produce millions of pairs, too many for the classifier to handle. <strong>Geometric blocking</strong> reduces this by selecting a short list of the most geometrically similar Index buildings for each Candidate. Only these shortlisted pairs advance to Stage 3.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
                     <div>Click <strong>"Run Blocking"</strong> in the sidebar, or press <strong>▶ Run for me</strong>.</div>
@@ -189,9 +189,9 @@ const tutorialSteps = [
             <div class="tutorial-step-content">
                 <p>A machine-learning model trained on known matches and non-matches scores each candidate pair. It outputs a confidence value representing how likely the two buildings are the same real-world structure. Pairs above the decision threshold are labelled as matches.</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:10px">
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — match found</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong>: match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong>: false positive</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong>: no match found</div>
                 </div>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
@@ -246,10 +246,10 @@ const tutorialSteps = [
         content: `
             <div class="tutorial-step-content">
                 <p>The pipeline matches Candidate buildings against an <strong>Index (B)</strong> reference dataset. Enable an Index tile to load it into the viewer.</p>
-                <p>Once both datasets are visible, click <strong>◑</strong> next to either layer to dim it — overlapping Candidate and Index buildings makes it easy to spot differences.</p>
+                <p>Once both datasets are visible, click <strong>◑</strong> next to either layer to dim it, overlapping Candidate and Index buildings makes it easy to spot differences.</p>
                 <div class="tutorial-action-row">
                     <div class="tutorial-action-arrow">←</div>
-                    <div>Check a checkbox under <strong>INDEX (B)</strong> in the Layers panel — or press <strong>▶ Run for me</strong>.</div>
+                    <div>Check a checkbox under <strong>INDEX (B)</strong> in the Layers panel, or press <strong>▶ Run for me</strong>.</div>
                 </div>
             </div>
         `,
@@ -305,11 +305,11 @@ const tutorialSteps = [
             <div class="tutorial-step-content">
                 <p>Scroll to the <strong>Geometric Features</strong> section at the bottom of the panel. These five measurements form the building's shape fingerprint:</p>
                 <ul class="tutorial-sublist">
-                    <li><strong>Footprint Area</strong> — 2D outline area (m²)</li>
-                    <li><strong>Height</strong> — ground to roof peak (m)</li>
-                    <li><strong>Perimeter</strong> — total footprint boundary length (m)</li>
-                    <li><strong>Compactness</strong> — circularity of the footprint (0–1)</li>
-                    <li><strong>Vertices</strong> — number of outline points</li>
+                    <li><strong>Footprint Area</strong>: 2D outline area (m²)</li>
+                    <li><strong>Height</strong>: ground to roof peak (m)</li>
+                    <li><strong>Perimeter</strong>: total footprint boundary length (m)</li>
+                    <li><strong>Compactness</strong>: circularity of the footprint (0–1)</li>
+                    <li><strong>Vertices</strong>: number of outline points</li>
                 </ul>
                 <p>When two buildings from different datasets have closely aligned measurements, it is strong evidence they represent the same real-world structure. The classifier uses these values to score each candidate pair.</p>
             </div>
@@ -382,8 +382,8 @@ const tutorialSteps = [
                     <div>The button is at the bottom of the comparison window. Press <strong>▶ Run for me</strong> to trigger it.</div>
                 </div>
                 <ul class="tutorial-sublist">
-                    <li><span style="color:#4caf50"><strong>MATCH</strong></span> — predicted to be the same building</li>
-                    <li><span style="color:#f44336"><strong>NO MATCH</strong></span> — predicted to be different buildings</li>
+                    <li><span style="color:#4caf50"><strong>MATCH</strong></span>: predicted to be the same building</li>
+                    <li><span style="color:#f44336"><strong>NO MATCH</strong></span>: predicted to be different buildings</li>
                 </ul>
             </div>
         `,
@@ -431,9 +431,9 @@ const tutorialSteps = [
                 </div>
                 <p>The building is now <strong style="color:#4caf50">green</strong>. The classifier correctly identified its counterpart in the Index dataset. All Candidate buildings have been scored:</p>
                 <div class="tutorial-color-legend" style="flex-direction:column;gap:8px;align-items:flex-start;margin:10px 0 12px">
-                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong> — match found</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong> — false positive</div>
-                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong> — no match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(76,175,80)"></span>&nbsp;<strong style="color:#4caf50">Green</strong>: match found</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(244,67,54)"></span>&nbsp;<strong style="color:#f44336">Red</strong>: false positive</div>
+                    <div><span class="tutorial-swatch" style="background:rgb(97,97,97)"></span>&nbsp;<strong>Grey</strong>: no match found</div>
                 </div>
                 <p>Press <strong>▶ Run for me</strong> to zoom out and see the full map, then press <strong>Next</strong> to inspect a false positive.</p>
             </div>
@@ -3473,7 +3473,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
         } else if (modelPickIdx !== null && userGuess === modelPickIdx) {
             // No true match exists — both user and model picked the same option, but it's a false positive
             bannerClass = 'incorrect';
-            bannerHtml = `You agreed with the model (both picked Option ${userGuess + 1}), but none of the pairs is the true match — this is a <strong>False Positive</strong>.`;
+            bannerHtml = `You agreed with the model (both picked Option ${userGuess + 1}), but none of the pairs is the true match, this is a <strong>False Positive</strong>.`;
         } else if (modelPickIdx !== null) {
             // No true match exists — model picked one option, user picked a different one; both are wrong
             bannerClass = 'incorrect';
