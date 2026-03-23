@@ -2707,22 +2707,16 @@ function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
         try { viewer = new ThreeBuildingViewer(containerId, color); }
         catch (e) { viewerEl.innerHTML = `<div style="padding:12px;color:#dc3545;font-size:12px;">Init error: ${e.message}</div>`; resolve(null); return; }
         window[vkey] = viewer;
-        let attempts = 0;
-        const check = setInterval(() => {
-            attempts++;
-            if (viewer.isInitialized) {
-                clearInterval(check);
-                try { viewer.loadBuilding(cityJSON); } catch (_) {}
-                setTimeout(() => {
-                    if (loadingMsg.parentNode) loadingMsg.remove();
-                    resolve(viewer);
-                }, 350);
-            } else if (attempts > 40) {
-                clearInterval(check);
-                viewerEl.innerHTML = '<div style="padding:12px;color:#dc3545;font-size:12px;">Timeout</div>';
-                resolve(null);
-            }
-        }, 100);
+        // ThreeBuildingViewer.init() is synchronous — isInitialized is true by the time
+        // the constructor returns, so we can call loadBuilding immediately.
+        if (viewer.isInitialized) {
+            try { viewer.loadBuilding(cityJSON); } catch (_) {}
+            if (loadingMsg.parentNode) loadingMsg.remove();
+            resolve(viewer);
+        } else {
+            viewerEl.innerHTML = '<div style="padding:12px;color:#dc3545;font-size:12px;">Init failed</div>';
+            resolve(null);
+        }
     });
 }
 // ────────────────────────────────────────────────────────────────────────────

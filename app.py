@@ -1016,7 +1016,13 @@ def find_building_file(building_id):
         else:
             numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
         numeric_id = str(numeric_id)
-        
+
+        # Return cached result if available — file mappings never change at runtime
+        cache_key = f"find-file:{numeric_id}"
+        cached = cache_get_json(cache_key)
+        if cached:
+            return jsonify(cached)
+
         print(f"Searching for building {building_id} (numeric: {numeric_id}) in files...")
         
         # Get source paths (same logic as get_files)
@@ -1085,20 +1091,16 @@ def find_building_file(building_id):
         # Search in Source A first
         file_path = search_in_directory(source_a_path, 'A')
         if file_path:
-            return jsonify({
-                'building_id': building_id,
-                'file_path': file_path,
-                'source': 'A'
-            })
+            result = {'building_id': building_id, 'file_path': file_path, 'source': 'A'}
+            cache_set_json(cache_key, result, ttl=86400)
+            return jsonify(result)
         
         # Search in Source B
         file_path = search_in_directory(source_b_path, 'B')
         if file_path:
-            return jsonify({
-                'building_id': building_id,
-                'file_path': file_path,
-                'source': 'B'
-            })
+            result = {'building_id': building_id, 'file_path': file_path, 'source': 'B'}
+            cache_set_json(cache_key, result, ttl=86400)
+            return jsonify(result)
         
         # Not found
         return jsonify({

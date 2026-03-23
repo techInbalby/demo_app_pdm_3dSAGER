@@ -25,9 +25,6 @@ class ThreeBuildingViewer {
                 throw new Error('Three.js library not loaded');
             }
             
-            console.log('Initializing Three.js viewer, container:', this.container);
-            console.log('Container dimensions:', this.container.clientWidth, 'x', this.container.clientHeight);
-            
             // Scene
             this.scene = new THREE.Scene();
             this.scene.background = new THREE.Color(0xffffff);
@@ -41,10 +38,7 @@ class ThreeBuildingViewer {
                 const computedStyle = window.getComputedStyle(this.container);
                 width = parseInt(computedStyle.width) || 400;
                 height = parseInt(computedStyle.height) || 400;
-                console.warn('Container had 0 dimensions, using computed/default:', width, 'x', height);
             }
-            
-            console.log('Creating camera with dimensions:', width, 'x', height);
             
             this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000);
             this.camera.position.set(0, 0, 150);
@@ -67,10 +61,6 @@ class ThreeBuildingViewer {
             this.renderer.domElement.style.width = '100%';
             this.renderer.domElement.style.height = '100%';
             
-            console.log('Three.js renderer created and added to container');
-            console.log('Canvas element:', this.renderer.domElement);
-            console.log('Canvas dimensions:', this.renderer.domElement.width, 'x', this.renderer.domElement.height);
-            
             // Controls - OrbitControls for interactive camera movement
             // OrbitControls should be loaded from CDN and available as THREE.OrbitControls
             const setupControls = () => {
@@ -82,21 +72,17 @@ class ThreeBuildingViewer {
                         this.controls.dampingFactor = 0.05;
                         this.controls.minDistance = 10;
                         this.controls.maxDistance = 500;
-                        this.controls.enablePan = true; // Allow panning (right-click drag or middle mouse)
-                        this.controls.enableZoom = true; // Allow zooming (scroll wheel)
-                        this.controls.enableRotate = true; // Allow rotation (left-click drag)
-                        this.controls.autoRotate = false; // Don't auto-rotate
-                        this.controls.screenSpacePanning = false; // Pan in world space (not screen space)
-                        
-                        console.log('OrbitControls initialized successfully - you can now rotate/pan/zoom the building');
+                        this.controls.enablePan = true;
+                        this.controls.enableZoom = true;
+                        this.controls.enableRotate = true;
+                        this.controls.autoRotate = false;
+                        this.controls.screenSpacePanning = false;
                     } else {
-                        console.warn('OrbitControls not found - trying alternative loading...');
                         // Retry if not loaded yet
                         setTimeout(setupControls, 200);
                     }
                 } catch (controlsError) {
-                    console.error('Error setting up OrbitControls:', controlsError);
-                    console.warn('Camera will be fixed (no rotation/panning)');
+                    console.warn('OrbitControls setup failed:', controlsError.message);
                 }
             };
             
@@ -111,12 +97,12 @@ class ThreeBuildingViewer {
             directionalLight.position.set(50, 50, 50);
             this.scene.add(directionalLight);
             
-            // Grid helper (optional, for reference) - make it smaller and less prominent
+            // Grid helper - subtle reference plane
             const gridHelper = new THREE.GridHelper(50, 10, 0xcccccc, 0xeeeeee);
             gridHelper.position.y = -0.1; // Slightly below ground
             this.scene.add(gridHelper);
             
-            // Add axes helper for debugging (small)
+            // Add axes helper (small)
             const axesHelper = new THREE.AxesHelper(10);
             this.scene.add(axesHelper);
             
@@ -127,10 +113,6 @@ class ThreeBuildingViewer {
             this.animate();
             
             this.isInitialized = true;
-            console.log('Three.js building viewer initialized successfully');
-            console.log('Scene children:', this.scene.children.length);
-            console.log('Renderer canvas:', this.renderer.domElement);
-            console.log('Canvas visible:', this.renderer.domElement.offsetWidth > 0 && this.renderer.domElement.offsetHeight > 0);
         } catch (error) {
             console.error('Error initializing Three.js viewer:', error);
             if (this.container) {
@@ -158,9 +140,6 @@ class ThreeBuildingViewer {
             return;
         }
         
-        console.log('Loading building in Three.js viewer, CityJSON keys:', Object.keys(cityJSON));
-        console.log('Full CityJSON:', JSON.stringify(cityJSON, null, 2));
-        
         // Clear existing building
         if (this.buildingMesh) {
             this.scene.remove(this.buildingMesh);
@@ -173,19 +152,12 @@ class ThreeBuildingViewer {
             this.buildingMesh = null;
         }
         
-        let buildingLoaded = false;
-        
         try {
             const cityObjects = cityJSON.CityObjects || {};
             const vertices = cityJSON.vertices || [];
             const transform = cityJSON.transform || null;
             
-            console.log('CityObjects count:', Object.keys(cityObjects).length);
-            console.log('Vertices count:', vertices.length);
-            console.log('Transform:', transform);
-            
             if (Object.keys(cityObjects).length === 0) {
-                console.error('No city objects in CityJSON');
                 throw new Error('No city objects in CityJSON');
             }
             
@@ -193,48 +165,40 @@ class ThreeBuildingViewer {
             const cityObject = cityObjects[objectId];
             const geometries = cityObject.geometry || [];
             
-            console.log('Building ID:', objectId);
-            console.log('Geometries count:', geometries.length);
-            
             if (geometries.length === 0) {
-                console.error('No geometries in city object');
                 throw new Error('No geometries in city object');
             }
             
             // Process first geometry
             const geometry = geometries[0];
-            console.log('Processing geometry type:', geometry.type);
-            console.log('Geometry data:', JSON.stringify(geometry, null, 2));
-            
-            const buildingShape = this.extractBuildingShape(geometry, vertices, transform);
-            
-            console.log('Extracted building shape points:', buildingShape.length);
-            console.log('First few shape points:', buildingShape.slice(0, 3));
+
+            // Pre-transform vertices once for use by both shape extraction and height calculation
+            let transformedVertices = vertices;
+            if (transform && vertices.length > 0) {
+                transformedVertices = vertices.map(v => [
+                    v[0] * transform.scale[0] + transform.translate[0],
+                    v[1] * transform.scale[1] + transform.translate[1],
+                    v[2] * transform.scale[2] + transform.translate[2]
+                ]);
+            }
+
+            const buildingShape = this.extractBuildingShape(geometry, transformedVertices);
             
             if (!buildingShape || buildingShape.length < 3) {
-                console.error('Invalid building shape, points:', buildingShape ? buildingShape.length : 0);
-                console.error('Geometry type:', geometry.type);
-                console.error('Geometry boundaries:', geometry.boundaries ? 'exists' : 'missing');
-                console.error('Vertices count:', vertices.length);
-                console.error('Transform:', transform);
-                
                 // Fallback: create a simple box building
-                console.warn('Creating fallback box building due to geometry extraction failure');
-                // BoxGeometry(width, height, depth) - height is Y-axis in Three.js
-                const fallbackGeometry = new THREE.BoxGeometry(10, 20, 10); // width, height, depth
+                const fallbackGeometry = new THREE.BoxGeometry(10, 20, 10);
                 const fallbackMaterial = new THREE.MeshStandardMaterial({
-                    color: 0xff0000, // Red to indicate fallback
+                    color: 0xff0000,
                     metalness: 0.1,
                     roughness: 0.8
                 });
                 this.buildingMesh = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-                this.buildingMesh.position.set(0, 10, 0); // Y=10 means 10 units up (center of 20-unit tall building)
+                this.buildingMesh.position.set(0, 10, 0);
                 this.scene.add(this.buildingMesh);
                 
-                // Fit camera to fallback building (isometric view)
                 const center = new THREE.Vector3(0, 10, 0);
                 const distance = 22;
-                const angle = Math.PI / 6; // 30 degrees
+                const angle = Math.PI / 6;
                 this.camera.position.set(
                     distance * Math.cos(angle) * Math.cos(angle),
                     center.y + distance * Math.sin(angle),
@@ -247,15 +211,11 @@ class ThreeBuildingViewer {
                     this.controls.update();
                 }
                 this.renderer.render(this.scene, this.camera);
-                
-                buildingLoaded = true;
-                console.log('Fallback building created and rendered');
-                return; // Exit early, don't try to create normal building
+                return;
             }
             
-            // Calculate height
-            const height = this.calculateBuildingHeight(geometry, vertices, transform);
-            console.log('Building height:', height);
+            // Calculate height using pre-transformed vertices
+            const height = this.calculateBuildingHeight(geometry, transformedVertices);
             
             // Calculate center and scale
             let centerX = 0, centerY = 0;
@@ -277,23 +237,12 @@ class ThreeBuildingViewer {
             const sizeY = maxY - minY;
             const maxSize = Math.max(sizeX, sizeY);
             
-            console.log('Shape center:', centerX, centerY);
-            console.log('Shape size:', sizeX, 'x', sizeY, 'max:', maxSize);
-            
-            // If coordinates are very large (geographic coordinates), we need to scale them down
-            // For Three.js, we want coordinates in a reasonable range (e.g., -50 to 50)
+            // Scale coordinates into a viewable range (~50 units)
             let scale = 1;
             if (maxSize > 100) {
-                // Coordinates are likely in meters from a geographic origin - scale down
-                // Scale to fit in ~50 unit range (so building is visible)
                 scale = 50 / maxSize;
-                console.log('Scaling coordinates by factor:', scale, '(maxSize was', maxSize, ')');
             } else if (maxSize < 0.1) {
-                // Coordinates are too small, scale up
                 scale = 50 / maxSize;
-                console.log('Scaling coordinates UP by factor:', scale, '(maxSize was', maxSize, ')');
-            } else {
-                console.log('No scaling needed, maxSize:', maxSize);
             }
             
             // Create 3D shape (centered and scaled)
@@ -305,11 +254,8 @@ class ThreeBuildingViewer {
                 const point = buildingShape[i];
                 shape.lineTo((point.x - centerX) * scale, (point.y - centerY) * scale);
             }
-            shape.lineTo((firstPoint.x - centerX) * scale, (firstPoint.y - centerY) * scale); // Close the shape
+            shape.lineTo((firstPoint.x - centerX) * scale, (firstPoint.y - centerY) * scale);
             
-            console.log('Shape created with', buildingShape.length, 'points, scaled by', scale);
-            
-            // Scale height proportionally if we scaled the footprint
             const scaledHeight = height * scale;
             
             // Extrude
@@ -319,13 +265,9 @@ class ThreeBuildingViewer {
             };
             
             const extrudeGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            
-            // Center the geometry (move to origin)
             extrudeGeometry.translate(0, 0, -scaledHeight / 2);
             
-            console.log('Extruded geometry created, height:', scaledHeight);
-            
-            // Material - use the color passed to constructor
+            // Material
             const material = new THREE.MeshStandardMaterial({
                 color: this.buildingColor,
                 metalness: 0.1,
@@ -334,10 +276,9 @@ class ThreeBuildingViewer {
             
             // Create mesh
             this.buildingMesh = new THREE.Mesh(extrudeGeometry, material);
-            this.buildingMesh.visible = true; // Ensure it's visible
+            this.buildingMesh.visible = true;
             
             // Rotate building to stand upright (Three.js uses Y-up, but we extruded along Z)
-            // Rotate 90 degrees around X-axis to make Z become Y
             this.buildingMesh.rotation.x = -Math.PI / 2;
             
             this.scene.add(this.buildingMesh);
@@ -347,33 +288,14 @@ class ThreeBuildingViewer {
             const boxCenter = boundingBox.getCenter(new THREE.Vector3());
             const boxSize = boundingBox.getSize(new THREE.Vector3());
             
-            console.log('Building mesh added to scene');
-            console.log('Building mesh position:', this.buildingMesh.position);
-            console.log('Building bounding box center:', boxCenter);
-            console.log('Building bounding box size:', boxSize);
-            console.log('Building scaled height:', scaledHeight);
-            console.log('Building footprint size:', maxSize, 'scaled:', maxSize * scale);
-            
             // Check if building has valid dimensions
             const maxDim = Math.max(boxSize.x, boxSize.y, boxSize.z);
             if (maxDim < 0.001 || !isFinite(maxDim)) {
                 throw new Error(`Invalid building dimensions: ${boxSize.x} x ${boxSize.y} x ${boxSize.z}`);
             }
             
-            // Force a render immediately (before camera adjustment)
-            this.renderer.render(this.scene, this.camera);
-            
             // Fit camera to building
             this.fitCameraToBuilding();
-            
-            // Verify camera can see the building
-            const cameraDistance = this.camera.position.distanceTo(boxCenter);
-            console.log('Camera distance from building center:', cameraDistance);
-            console.log('Building max dimension:', maxDim);
-            console.log('Camera should see building:', cameraDistance < maxDim * 10);
-            
-            // Render again after camera adjustment
-            this.renderer.render(this.scene, this.camera);
             
             // Verify building is actually visible by checking if it's in camera frustum
             const frustum = new THREE.Frustum();
@@ -383,12 +305,9 @@ class ThreeBuildingViewer {
                     this.camera.matrixWorldInverse
                 )
             );
-            const buildingInFrustum = frustum.intersectsBox(boundingBox);
-            console.log('Building in camera frustum:', buildingInFrustum);
             
-            if (!buildingInFrustum) {
-                console.warn('Building is not in camera frustum! Adjusting camera...');
-                // Try to fix camera position
+            if (!frustum.intersectsBox(boundingBox)) {
+                // Fix camera position if building is outside frustum
                 this.camera.position.set(boxCenter.x, boxCenter.y + maxDim * 1.2, boxCenter.z + maxDim * 1.2);
                 this.camera.lookAt(boxCenter);
                 this.camera.updateProjectionMatrix();
@@ -396,111 +315,51 @@ class ThreeBuildingViewer {
                     this.controls.target.copy(boxCenter);
                     this.controls.update();
                 }
-                this.renderer.render(this.scene, this.camera);
             }
             
-            buildingLoaded = true;
-            
-            console.log('Building loaded successfully in Three.js viewer');
-            console.log('Scene now has', this.scene.children.length, 'children');
-            console.log('Building mesh visible:', this.buildingMesh.visible);
-            console.log('Camera position:', this.camera.position);
-            console.log('Camera looking at:', this.camera.getWorldDirection(new THREE.Vector3()));
-            
-            // Force multiple renders to ensure visibility
-            for (let i = 0; i < 3; i++) {
-                setTimeout(() => {
-                    this.renderer.render(this.scene, this.camera);
-                }, i * 100);
-            }
+            // The continuous animate() loop handles all subsequent renders
         } catch (error) {
-            console.error('Error loading building in Three.js viewer:', error);
-            console.error('Error stack:', error.stack);
-            console.error('Error details:', {
-                message: error.message,
-                name: error.name,
-                geometry: geometry ? { type: geometry.type, hasBoundaries: !!geometry.boundaries } : null,
-                verticesCount: vertices ? vertices.length : 0,
-                transform: transform
-            });
+            console.error('Error loading building in Three.js viewer:', error.message);
         }
     }
     
-    extractBuildingShape(geometry, vertices, transform) {
+    // Accepts pre-transformed vertices (no transform param needed)
+    extractBuildingShape(geometry, transformedVertices) {
         const points = [];
         
         try {
-            console.log('Extracting building shape, geometry type:', geometry.type);
-            console.log('Geometry structure:', JSON.stringify(geometry, null, 2));
-            
-            // Pre-transform vertices if transform is available (same as Cesium viewer)
-            let transformedVertices = vertices;
-            if (transform && vertices.length > 0) {
-                transformedVertices = vertices.map(vertex => [
-                    vertex[0] * transform.scale[0] + transform.translate[0],
-                    vertex[1] * transform.scale[1] + transform.translate[1],
-                    vertex[2] * transform.scale[2] + transform.translate[2]
-                ]);
-                console.log('Pre-transformed', vertices.length, 'vertices');
-            }
-            
             if (geometry.type === 'Solid' && geometry.boundaries) {
-                // Get the outer shell (first boundary) - same logic as Cesium
                 const outerShell = geometry.boundaries[0];
-                
                 if (outerShell && outerShell.length > 0) {
-                    // Get the first face's first ring (footprint) - same as Cesium
                     const firstFace = outerShell[0];
                     if (firstFace && firstFace.length > 0) {
                         const firstRing = firstFace[0];
-                        
-                        console.log('Solid geometry: outerShell faces:', outerShell.length, 'firstFace rings:', firstFace.length, 'firstRing vertices:', firstRing.length);
-                        
                         firstRing.forEach(vertexIdx => {
                             if (vertexIdx >= 0 && vertexIdx < transformedVertices.length) {
                                 const vertex = transformedVertices[vertexIdx];
                                 points.push({ x: vertex[0], y: vertex[1], z: vertex[2] });
-                            } else {
-                                console.warn('Invalid vertex index:', vertexIdx, 'vertices length:', transformedVertices.length);
                             }
                         });
-                    } else {
-                        console.warn('Solid: firstFace is empty or invalid');
                     }
-                } else {
-                    console.warn('Solid: outerShell is empty or invalid');
                 }
             } else if (geometry.type === 'MultiSurface' && geometry.boundaries) {
-                // Handle MultiSurface - use first surface (same as Cesium)
                 if (geometry.boundaries.length > 0) {
                     const firstSurface = geometry.boundaries[0];
                     if (firstSurface && firstSurface.length > 0) {
                         const firstRing = firstSurface[0];
-                        
-                        console.log('MultiSurface: surfaces:', geometry.boundaries.length, 'firstSurface rings:', firstSurface.length, 'firstRing vertices:', firstRing.length);
-                        
                         firstRing.forEach(vertexIdx => {
                             if (vertexIdx >= 0 && vertexIdx < transformedVertices.length) {
                                 const vertex = transformedVertices[vertexIdx];
                                 points.push({ x: vertex[0], y: vertex[1], z: vertex[2] });
-                            } else {
-                                console.warn('Invalid vertex index:', vertexIdx, 'vertices length:', transformedVertices.length);
                             }
                         });
-                    } else {
-                        console.warn('MultiSurface: firstSurface is empty or invalid');
                     }
-                } else {
-                    console.warn('MultiSurface: boundaries array is empty');
                 }
             } else if (geometry.type === 'CompositeSurface' && geometry.boundaries) {
-                // Handle CompositeSurface - try first surface
                 if (geometry.boundaries.length > 0) {
                     const firstSurface = geometry.boundaries[0];
                     if (firstSurface && firstSurface.length > 0) {
                         const firstRing = firstSurface[0];
-                        console.log('CompositeSurface: surfaces:', geometry.boundaries.length, 'firstRing vertices:', firstRing.length);
-                        
                         firstRing.forEach(vertexIdx => {
                             if (vertexIdx >= 0 && vertexIdx < transformedVertices.length) {
                                 const vertex = transformedVertices[vertexIdx];
@@ -509,12 +368,7 @@ class ThreeBuildingViewer {
                         });
                     }
                 }
-            } else {
-                console.warn('Unsupported geometry type:', geometry.type, 'or missing boundaries');
-                console.log('Available geometry keys:', Object.keys(geometry));
             }
-            
-            console.log('Extracted', points.length, 'points for building shape');
             
             // Remove duplicate consecutive points
             const uniquePoints = [];
@@ -526,35 +380,21 @@ class ThreeBuildingViewer {
                 }
             }
             
-            if (uniquePoints.length < points.length) {
-                console.log('Removed', points.length - uniquePoints.length, 'duplicate points');
-            }
-            
-            return uniquePoints.length >= 3 ? uniquePoints : points; // Return at least original points if uniquePoints is too small
+            return uniquePoints.length >= 3 ? uniquePoints : points;
         } catch (error) {
-            console.error('Error extracting building shape:', error);
-            console.error('Error stack:', error.stack);
-            return points; // Return whatever we have
+            console.error('Error extracting building shape:', error.message);
+            return points;
         }
     }
     
-    calculateBuildingHeight(geometry, vertices, transform) {
+    // Accepts pre-transformed vertices (no transform param needed)
+    calculateBuildingHeight(geometry, transformedVertices) {
         let minZ = Infinity;
         let maxZ = -Infinity;
         
         try {
-            // Pre-transform vertices if transform is available (same as Cesium)
-            let transformedVertices = vertices;
-            if (transform && vertices.length > 0) {
-                transformedVertices = vertices.map(vertex => [
-                    vertex[0] * transform.scale[0] + transform.translate[0],
-                    vertex[1] * transform.scale[1] + transform.translate[1],
-                    vertex[2] * transform.scale[2] + transform.translate[2]
-                ]);
-            }
-            
             const processVertex = (vertex) => {
-                const z = vertex[2]; // Already transformed if needed
+                const z = vertex[2];
                 minZ = Math.min(minZ, z);
                 maxZ = Math.max(maxZ, z);
             };
@@ -606,42 +446,28 @@ class ThreeBuildingViewer {
                 });
             }
             
-            const height = maxZ > minZ ? (maxZ - minZ) : 10;
-            console.log('Calculated building height:', height, '(minZ:', minZ, 'maxZ:', maxZ, ')');
-            return height;
+            return maxZ > minZ ? (maxZ - minZ) : 10;
         } catch (error) {
-            console.error('Error calculating building height:', error);
-            console.error('Error stack:', error.stack);
-            return 10; // Default height if calculation fails
+            console.error('Error calculating building height:', error.message);
+            return 10;
         }
     }
     
     fitCameraToBuilding() {
-        if (!this.buildingMesh) {
-            console.warn('No building mesh to fit camera to');
-            return;
-        }
+        if (!this.buildingMesh) return;
         
         try {
             const box = new THREE.Box3().setFromObject(this.buildingMesh);
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
             
-            console.log('Building bounding box center:', center);
-            console.log('Building bounding box size:', size);
-            
             const maxDim = Math.max(size.x, size.y, size.z);
-            // Zoom in closer — distance = 1.5× largest dimension, min 35 units
             const distance = Math.max(maxDim * 1.5, 35);
             
-            console.log('Camera distance:', distance);
-            
-            // Position camera at an isometric angle (top-front-right view)
-            // This gives a nice 3D view of the building
-            const angle = Math.PI / 6; // 30 degrees
+            const angle = Math.PI / 6; // 30 degrees — isometric view
             this.camera.position.set(
                 center.x + distance * Math.cos(angle) * Math.cos(angle),
-                center.y + distance * Math.sin(angle), // Higher up for top-down-ish view
+                center.y + distance * Math.sin(angle),
                 center.z + distance * Math.cos(angle) * Math.sin(angle)
             );
             this.camera.lookAt(center);
@@ -651,11 +477,8 @@ class ThreeBuildingViewer {
                 this.controls.target.copy(center);
                 this.controls.update();
             }
-            
-            console.log('Camera positioned at:', this.camera.position);
-            console.log('Camera looking at:', center);
         } catch (error) {
-            console.error('Error fitting camera to building:', error);
+            console.error('Error fitting camera to building:', error.message);
         }
     }
     
