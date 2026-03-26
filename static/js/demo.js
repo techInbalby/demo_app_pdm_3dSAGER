@@ -10,6 +10,8 @@ let bkafiLoaded = false; // Track if BKAFI results have been loaded
 let buildingFeaturesCache = {}; // Cache features for all buildings
 let buildingBkafiCache = {}; // Cache BKAFI pairs for buildings
 let buildingStatusCache = null; // Cache building status to avoid repeated API calls
+let _cachedOptimizedStatusMap = null; // Cached result of buildOptimizedStatusMap
+let _colorUpdateTicket = null; // Concurrency guard for color update calls
 let pipelineState = {
     step1Completed: false, // Geometric Featurization
     step2Completed: false, // BKAFI Blocking
@@ -1537,6 +1539,7 @@ window.toggleLayerDimmed = toggleLayerDimmed;
 function setPipelineFile(filePath) {
     selectedFile = filePath;
     buildingStatusCache = null;
+    _cachedOptimizedStatusMap = null;
     const btn = document.getElementById('step-btn-1');
     if (btn) btn.disabled = !filePath;
     if (!filePath) {
@@ -1781,6 +1784,9 @@ function setActiveFileFromViewer(filePath) {
     if (!filePath) {
         return;
     }
+    if (selectedFile === filePath) {
+        return;
+    }
     selectedFile = filePath;
     if (filePath.includes('/Source A/')) {
         currentSource = 'A';
@@ -1790,11 +1796,6 @@ function setActiveFileFromViewer(filePath) {
     }
     if (window.viewer && window.viewer.applyLayerVisualStyles) {
         window.viewer.applyLayerVisualStyles(selectedFile);
-    }
-    if (window.viewer && selectedFile) {
-        if (pipelineState.step3Completed) updateBuildingColorsForStage3(true);
-        else if (pipelineState.step2Completed) updateBuildingColorsForStage2(true);
-        else if (pipelineState.step1Completed) updateBuildingColorsForStage1(true);
     }
 }
 
@@ -1858,7 +1859,8 @@ function resetPipelineState() {
     selectedBuildingData = null;
     featuresLoaded = false;
     bkafiLoaded = false;
-    buildingStatusCache = null; // Clear cache when resetting
+    buildingStatusCache = null;
+    _cachedOptimizedStatusMap = null;
     buildingFeaturesCache = {};
     buildingBkafiCache = {};
     
@@ -2222,7 +2224,6 @@ function calculateGeometricFeatures() {
             advanceTutorialForPipelineAction('calculateFeatures');
             updateBuildingColorsForStage1(true, function () {
                 clearSafety();
-                if (selectedBuildingId) updateSelectedBuildingColor();
                 hideLoading();
             });
             if (selectedBuildingId) loadBuildingFeatures(selectedBuildingId);
@@ -2473,11 +2474,6 @@ function runBKAFI() {
         
         // Update building colors based on BKAFI pairs (use cached data if available)
         updateBuildingColorsForStage2(true, () => {
-            // After bulk update, specifically update the selected building if properties window is open
-            if (selectedBuildingId) {
-                updateSelectedBuildingColor();
-            }
-            // Hide loading when color update completes
             hideLoading();
         });
         
@@ -2680,7 +2676,12 @@ async function _fetchBuildingDataForComparison(buildingId) {
 }
 
 /** Initialise a ThreeBuildingViewer inside viewerEl and load cityJSON (returns promise) */
-function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
+// Default blue matches the Cesium map default building color (116, 151, 223).
+// Pair slots each get a distinct vivid color so buildings are easy to tell apart.
+const _CANDIDATE_VIEWER_COLOR = 0x7497DF;
+const _PAIR_VIEWER_COLORS     = [0xF44336, 0x4CAF50, 0x9C27B0]; // red, green, purple
+
+function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType, color = null) {
     return new Promise((resolve) => {
         if (!viewerEl) { resolve(null); return; }
         // Use a CHILD wrapper so viewerEl's original ID stays intact for future lookups
@@ -2702,9 +2703,11 @@ function _loadCityJSONInViewer(buildingId, cityJSON, viewerEl, viewerType) {
         loadingMsg.textContent = 'Rendering…';
         viewerEl.appendChild(loadingMsg);
         viewerEl.appendChild(wrapper);
-        const color = viewerType === 'candidate' ? 0x2196F3 : 0x8B0000;
+        const resolvedColor = color !== null ? color
+            : viewerType === 'candidate' ? _CANDIDATE_VIEWER_COLOR
+            : _PAIR_VIEWER_COLORS[0];
         let viewer;
-        try { viewer = new ThreeBuildingViewer(containerId, color); }
+        try { viewer = new ThreeBuildingViewer(containerId, resolvedColor); }
         catch (e) { viewerEl.innerHTML = `<div style="padding:12px;color:#dc3545;font-size:12px;">Init error: ${e.message}</div>`; resolve(null); return; }
         window[vkey] = viewer;
         // ThreeBuildingViewer.init() is synchronous — isInitialized is true by the time
@@ -2949,7 +2952,10 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         updateCarouselUI();
         // Switch the building in the viewer (both before AND after reveal)
         if (pairViewer && pairViewer.isInitialized && pairCityData[idx]) {
-            try { pairViewer.loadBuilding(pairCityData[idx].cityJSON); } catch (_) {}
+            try {
+                pairViewer.buildingColor = _PAIR_VIEWER_COLORS[idx % _PAIR_VIEWER_COLORS.length];
+                pairViewer.loadBuilding(pairCityData[idx].cityJSON);
+            } catch (_) {}
         }
         // If already revealed, refresh the result styling for the new current option
         if (comparisonWindow.getAttribute('data-revealed') === '1') {
@@ -3030,16 +3036,17 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         // Load candidate viewer first, then pair (stagger to avoid dual WebGL init issues)
         const candResult = results[0];
         if (!candResult.error && candidateViewerEl) {
-            await _loadCityJSONInViewer(candResult.buildingId, candResult.cityJSON, candidateViewerEl, 'candidate');
+            await _loadCityJSONInViewer(candResult.buildingId, candResult.cityJSON, candidateViewerEl, 'candidate', _CANDIDATE_VIEWER_COLOR);
         }
 
         // Small pause between WebGL context creations
         await new Promise(r => setTimeout(r, 80));
 
         // Load pair carousel viewer (only ONE Three.js viewer for all pairs)
-        const firstPair = pairCityData.find(d => d !== null);
+        const firstPairIdx = pairCityData.findIndex(d => d !== null);
+        const firstPair = firstPairIdx !== -1 ? pairCityData[firstPairIdx] : null;
         if (firstPair && pairViewerEl) {
-            pairViewer = await _loadCityJSONInViewer(firstPair.buildingId, firstPair.cityJSON, pairViewerEl, 'pair-carousel');
+            pairViewer = await _loadCityJSONInViewer(firstPair.buildingId, firstPair.cityJSON, pairViewerEl, 'pair-carousel', _PAIR_VIEWER_COLORS[firstPairIdx % _PAIR_VIEWER_COLORS.length]);
             // Re-attach all overlay controls (innerHTML reset in _loadCityJSONInViewer wipes them)
             pairViewerEl.style.position = 'relative';
             pairViewerEl.appendChild(counter);
@@ -3259,8 +3266,9 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
                     }
                     
                     // Create Three.js viewer (lightweight, fast) - NOT Cesium!
-                    // Set color based on viewer type: blue for candidate, dark red for pairs
-                    const buildingColor = viewerType === 'candidate' ? 0x2196F3 : 0x8B0000; // Blue for candidate, dark red for pairs
+                    const buildingColor = viewerType === 'candidate'
+                        ? _CANDIDATE_VIEWER_COLOR
+                        : _PAIR_VIEWER_COLORS[0];
                     const viewer = new ThreeBuildingViewer(containerId, buildingColor);
                     window[viewerKey] = viewer; // Store reference
                     console.log(`Stored viewer with key: ${viewerKey} for building: ${buildingId}`);
@@ -3363,9 +3371,13 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
 }
 
 
-// Clean up comparison viewer instances
+var _lastCleanupTime = 0;
 function cleanupComparisonViewers() {
-    console.log('Cleaning up old comparison viewer instances');
+    var now = performance.now();
+    if (now - _lastCleanupTime > 500) {
+        console.log('Cleaning up old comparison viewer instances');
+    }
+    _lastCleanupTime = now;
     
     // Dispose candidate viewer
     if (window['comparison-viewer-candidate']) {
@@ -3647,14 +3659,8 @@ function viewResults() {
             
             // Update building colors based on match status (use cached data if available)
             updateBuildingColorsForStage3(true, () => {
-                // After bulk update, specifically update the selected building if properties window is open
-                if (selectedBuildingId) {
-                    updateSelectedBuildingColor();
-                }
-                // Hide loading when color update completes
                 hideLoading();
                 
-                // Show results summary window (suppress during tutorial)
                 const tutorialGuide = document.getElementById('tutorial-guide');
                 if (!tutorialGuide || tutorialGuide.style.display === 'none') {
                     showClassifierResultsSummary(results);
@@ -3795,7 +3801,8 @@ function updateSelectedBuildingColor() {
     // Use cached status if available
     getBuildingStatus(false)
         .then(data => {
-            const status = findBuildingStatus(selectedBuildingId, data.buildings);
+            const { statusMap } = buildOptimizedStatusMap(data);
+            const status = findBuildingStatus(selectedBuildingId, statusMap);
             
             if (status) {
                 let colorName = 'blue'; // Default
@@ -3857,6 +3864,7 @@ function getBuildingStatus(forceRefresh = false) {
                     return;
                 }
                 buildingStatusCache = data;
+                _cachedOptimizedStatusMap = null;
                 resolve(data);
             })
             .catch(err => {
@@ -3870,12 +3878,13 @@ function getBuildingStatus(forceRefresh = false) {
     });
 }
 
-// Pre-compute status map with all ID variations for fast lookups
+// Pre-compute status map with all ID variations for fast lookups (cached)
 function buildOptimizedStatusMap(data) {
+    if (_cachedOptimizedStatusMap) return _cachedOptimizedStatusMap;
+    
     const statusMap = {};
     const numericMap = {};
     
-    // Build maps with all ID variations upfront
     Object.entries(data.buildings).forEach(([buildingId, status]) => {
         const numericId = extractNumericId(buildingId);
         
@@ -3897,7 +3906,8 @@ function buildOptimizedStatusMap(data) {
         }
     });
     
-    return { statusMap, numericMap };
+    _cachedOptimizedStatusMap = { statusMap, numericMap };
+    return _cachedOptimizedStatusMap;
 }
 
 // Helper function to match building IDs (optimized with pre-computed map)
@@ -3938,6 +3948,10 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
         return Promise.resolve();
     }
     
+    if (_colorUpdateTicket) _colorUpdateTicket.cancelled = true;
+    var ticket = { cancelled: false };
+    _colorUpdateTicket = ticket;
+    
     var startTime = performance.now();
     var completed = false;
     var done = function () {
@@ -3948,6 +3962,7 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
     
     var chain = getBuildingStatus(forceRefresh)
         .then(function (data) {
+            if (ticket.cancelled) { done(); return Promise.resolve(); }
             var buildingColors = {};
             var statusMap = buildOptimizedStatusMap(data).statusMap;
             if (window.viewer && window.viewer.buildingEntities) {
@@ -3956,8 +3971,10 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
                     buildingColors[viewerBuildingId] = (status && status.has_features) ? 'orange' : 'blue';
                 });
             }
+            if (ticket.cancelled) { done(); return Promise.resolve(); }
             if (Object.keys(buildingColors).length > 0) {
                 return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(function () {
+                    if (ticket.cancelled) { done(); return; }
                     console.log('Updated colors for ' + Object.keys(buildingColors).length + ' buildings (Stage 1) in ' + (performance.now() - startTime).toFixed(2) + 'ms');
                     done();
                 });
@@ -3994,12 +4011,16 @@ function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) 
         return;
     }
     
+    if (_colorUpdateTicket) _colorUpdateTicket.cancelled = true;
+    const ticket = { cancelled: false };
+    _colorUpdateTicket = ticket;
+    
     const startTime = performance.now();
     
     return getBuildingStatus(forceRefresh)
         .then(data => {
+            if (ticket.cancelled) { if (onComplete) onComplete(); return Promise.resolve(); }
             const buildingColors = {};
-            // Pre-compute status map with all ID variations (optimized)
             const { statusMap } = buildOptimizedStatusMap(data);
             
             // Update colors for ALL buildings in the viewer (including selected building)
@@ -4019,18 +4040,12 @@ function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) 
                 });
             }
             
+            if (ticket.cancelled) { if (onComplete) onComplete(); return Promise.resolve(); }
             if (Object.keys(buildingColors).length > 0) {
-                // Wait for color updates to complete before calling onComplete
                 return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(() => {
+                    if (ticket.cancelled) { if (onComplete) onComplete(); return; }
                     const endTime = performance.now();
                     console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 2) in ${(endTime - startTime).toFixed(2)}ms`);
-                    
-                    // Log if selected building was updated
-                    if (selectedBuildingId && buildingColors[selectedBuildingId]) {
-                        console.log(`Selected building ${selectedBuildingId} colored to: ${buildingColors[selectedBuildingId]}`);
-                    } else if (selectedBuildingId) {
-                        console.warn(`Selected building ${selectedBuildingId} not found in buildingColors map`);
-                    }
                     if (onComplete) onComplete();
                 });
             } else {
@@ -4053,15 +4068,18 @@ function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) 
         return;
     }
     
+    if (_colorUpdateTicket) _colorUpdateTicket.cancelled = true;
+    const ticket = { cancelled: false };
+    _colorUpdateTicket = ticket;
+    
     const startTime = performance.now();
     
     return getBuildingStatus(forceRefresh)
         .then(data => {
+            if (ticket.cancelled) { if (onComplete) onComplete(); return Promise.resolve(); }
             const buildingColors = {};
-            // Pre-compute status map with all ID variations (optimized)
             const { statusMap } = buildOptimizedStatusMap(data);
             
-            // Update colors for ALL buildings in the viewer
             if (window.viewer && window.viewer.buildingEntities) {
                 window.viewer.buildingEntities.forEach((entities, viewerBuildingId) => {
                     const status = findBuildingStatus(viewerBuildingId, statusMap);
@@ -4073,24 +4091,18 @@ function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) 
                         } else if (status.match_status === 'no_match') {
                             buildingColors[viewerBuildingId] = 'darkgray';
                         } else {
-                            // No match status yet, keep previous color
-                            if (status.has_pairs) {
-                                buildingColors[viewerBuildingId] = 'yellow';
-                            } else if (status.has_features) {
-                                buildingColors[viewerBuildingId] = 'orange';
-                            } else {
-                                buildingColors[viewerBuildingId] = 'blue';
-                            }
+                            buildingColors[viewerBuildingId] = 'darkgray';
                         }
                     } else {
-                        buildingColors[viewerBuildingId] = 'blue'; // Default
+                        buildingColors[viewerBuildingId] = 'blue';
                     }
                 });
             }
             
+            if (ticket.cancelled) { if (onComplete) onComplete(); return Promise.resolve(); }
             if (Object.keys(buildingColors).length > 0) {
-                // Wait for color updates to complete before calling onComplete
                 return window.viewer.updateBuildingColors(buildingColors, selectedFile).then(() => {
+                    if (ticket.cancelled) { if (onComplete) onComplete(); return; }
                     const endTime = performance.now();
                     console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 3) in ${(endTime - startTime).toFixed(2)}ms`);
                     if (onComplete) onComplete();

@@ -1396,28 +1396,25 @@ class CesiumCityJSONViewer {
                     });
                 });
             } else {
-                const totalBuildings = Object.keys(buildingColors).length;
-                if (totalBuildings === 0) {
+                if (Object.keys(buildingColors).length === 0) {
                     resolve();
                     return;
                 }
-                const updates = [];
+                let applied = false;
                 Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
                     const newColor = BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'];
                     const entities = this._findEntitiesById(buildingId);
                     if (entities && entities.length > 0) {
-                        updates.push({ entities, color: newColor });
+                        applied = true;
+                        entities.forEach(entity => {
+                            applyColor(entity, newColor, SELECTED_LAYER_OUTLINE, 1.5);
+                        });
                     }
                 });
-                if (updates.length === 0) {
+                if (!applied) {
                     resolve();
                     return;
                 }
-                updates.forEach(({ entities, color }) => {
-                    entities.forEach(entity => {
-                        applyColor(entity, color, SELECTED_LAYER_OUTLINE, 1.5);
-                    });
-                });
             }
             
             // Force Cesium to render immediately
