@@ -2835,7 +2835,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     const yourPickRibbon = document.createElement('div');
     yourPickRibbon.id = 'carousel-your-pick';
     yourPickRibbon.className = 'carousel-your-pick';
-    yourPickRibbon.textContent = '⭐ Your Pick';
+    yourPickRibbon.textContent = 'Your Pick';
     pairViewerEl.appendChild(yourPickRibbon);
 
     card.appendChild(pairViewerEl);
@@ -2941,7 +2941,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         yourPickRibbon.classList.toggle('visible', userGuess === currentIdx);
         // pick button label
         if (comparisonWindow.getAttribute('data-revealed') !== '1') {
-            pickBtn.textContent = userGuess === currentIdx ? '✓ Your Pick' : 'Pick This Match';
+            pickBtn.textContent = userGuess === currentIdx ? 'Your Pick' : 'Pick This Match';
             pickBtn.classList.toggle('selected', userGuess === currentIdx);
         }
     }
@@ -2992,7 +2992,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         if (pred === 1 && tl === 1) {
             card.classList.add('pair-result-true');
             resultBadge.classList.add('true-match');
-            resultBadge.textContent = '✓ True Match';
+            resultBadge.textContent = 'True Match';
         } else if (pred === 1 && tl === 0) {
             card.classList.add('pair-result-false-positive');
             resultBadge.classList.add('false-pos');
@@ -3000,7 +3000,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         } else if (tl === 1) {
             card.classList.add('pair-result-true');
             resultBadge.classList.add('true-match');
-            resultBadge.textContent = '✓ True Match (missed by model)';
+            resultBadge.textContent = 'True Match (AI missed it)';
         } else {
             card.classList.add('pair-result-no-match');
             resultBadge.classList.add('no-match');
@@ -3437,16 +3437,23 @@ function cleanupComparisonViewers() {
 // Show classifier results — carousel version with user-guess comparison
 function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, userGuess) {
     const pairsToShow = pairs.slice(0, 3);
+    const decisionThreshold = 0.5;
+    const thresholdPct = `${(decisionThreshold * 100).toFixed(0)}%`;
     const compWin = document.getElementById('bkafi-comparison-window');
     if (compWin) compWin.setAttribute('data-revealed', '1');
 
     // ── compute model & truth indices ─────────────────────────────────────────
     let modelPickIdx = null;
+    let modelPickConfidence = -Infinity;
     let truMatchIdx  = null;
     pairsToShow.forEach((pair, i) => {
         const pred = pair.prediction !== undefined ? pair.prediction : (pair.confidence > 0.5 ? 1 : 0);
         const tl   = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
-        if (pred === 1 && modelPickIdx === null) modelPickIdx = i;
+        const conf = typeof pair.confidence === 'number' ? pair.confidence : -Infinity;
+        if (pred === 1 && (modelPickIdx === null || conf > modelPickConfidence)) {
+            modelPickIdx = i;
+            modelPickConfidence = conf;
+        }
         if (tl === 1 && truMatchIdx === null)  truMatchIdx = i;
     });
 
@@ -3469,7 +3476,16 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
         if (truMatchIdx !== null) {
             if (userGuess === truMatchIdx) {
                 bannerClass = 'correct';
-                bannerHtml = `🎉 Correct! Option ${userGuess + 1} is the true match.`;
+                if (modelPickIdx !== null && modelPickIdx !== truMatchIdx) {
+                    const modelConfText = Number.isFinite(modelPickConfidence)
+                        ? ` (${(modelPickConfidence * 100).toFixed(0)}% confidence)`
+                        : '';
+                    bannerHtml = `Correct. Option ${userGuess + 1} is the true match. The AI's top-confidence match was Option ${modelPickIdx + 1}${modelConfText}.`;
+                } else if (modelPickIdx === null) {
+                    bannerHtml = `Correct. Option ${userGuess + 1} is the true match, and the AI did not identify a match.`;
+                } else {
+                    bannerHtml = `Correct! Option ${userGuess + 1} is the true match.`;
+                }
             } else {
                 bannerClass = 'incorrect';
                 bannerHtml = `The true match is Option ${truMatchIdx + 1}. You picked Option ${userGuess + 1}.`;
@@ -3499,7 +3515,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
     // Header row
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;justify-content:space-between;padding:3px 2px 5px;border-bottom:2px solid #e2e8f0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;';
-    header.innerHTML = '<span>Option</span><span>Model Prediction</span><span>Confidence</span><span>True Label</span>';
+    header.innerHTML = `<span>Option</span><span>Model Prediction (threshold: ${thresholdPct})</span><span>Confidence</span><span>True Label</span>`;
     table.appendChild(header);
 
     pairsToShow.forEach((pair, i) => {
@@ -3508,12 +3524,15 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
         const predColor = pred === 1 ? '#22c55e' : '#94a3b8';
         const tlColor   = tl === 1 ? '#22c55e' : (tl === 0 ? '#f97316' : '#94a3b8');
         const confPct   = pair.confidence !== undefined ? `${(pair.confidence * 100).toFixed(0)}%` : '—';
-        const isUserPick = userGuess === i ? ' ⭐' : '';
+        const isUserPick = userGuess === i ? ' (Your Pick)' : '';
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #f0f0f0;cursor:pointer;';
+        const predictionLabel = pred === 1
+            ? `Match (>= ${thresholdPct})`
+            : `No (< ${thresholdPct})`;
         row.innerHTML = `
             <span style="font-weight:600;color:#555;">Opt ${i + 1}${isUserPick}</span>
-            <span>Model: <strong style="color:${predColor}">${pred === 1 ? 'Match' : 'No'}</strong></span>
+            <span>Model: <strong style="color:${predColor}">${predictionLabel}</strong></span>
             <span>${confPct}</span>
             <span>True: <strong style="color:${tlColor}">${tl === 1 ? 'Match' : tl === 0 ? 'No' : '—'}</strong></span>`;
         // clicking a row navigates the carousel to that option
@@ -3527,7 +3546,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
     // ── "Show Matches on Map" button ──────────────────────────────────────────
     const backBtn = document.createElement('button');
     backBtn.className = 'back-to-map-btn';
-    backBtn.innerHTML = '🗺 Show Matches on Map';
+    backBtn.innerHTML = 'Show Matches on Map';
     backBtn.addEventListener('click', () => {
         hideBeacon();
         // Place markers FIRST (before closing, so viewer is still accessible)
