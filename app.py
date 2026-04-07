@@ -6,16 +6,19 @@ Provides web interface and API endpoints for 3D geospatial entity resolution
 import os
 import json
 import re
+import copy
 import pandas as pd
 from flask import Flask, render_template, jsonify, request, make_response
 from flask_compress import Compress
 from pathlib import Path
 import hashlib
 import redis
+import numpy as np
 
 from tasks import celery as celery_app
 from tasks import calculate_features as calculate_features_task
 from tasks import load_bkafi_results as load_bkafi_task
+from scripts.arun_alignment import estimate_rigid_transform_3d, apply_rigid_transform
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
@@ -37,6 +40,11 @@ FEATURES_PARQUET = DATA_DIR / 'property_dicts' / 'features.parquet'
 CONFIDENCE_THRESHOLD = 0.5
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 CACHE_TTL_SECONDS = int(os.getenv('CACHE_TTL_SECONDS', '21600'))
+DEFAULT_PDM_ANCHOR_IDS = [
+    '0518100000327112',
+    '0518100000213258',
+    '0518100000285840',
+]
 
 _redis_client = None
 
@@ -70,6 +78,131 @@ def cache_set_json(key, payload, ttl=CACHE_TTL_SECONDS):
         return False
     client.set(key, json.dumps(payload), ex=ttl)
     return True
+
+
+def _normalize_building_id(value: str) -> str:
+    match = re.search(r'(\d{10,})', str(value))
+    return match.group(1) if match else str(value)
+
+
+def _resolve_data_file(file_path: str, prefer_prebaked: bool = False) -> Path:
+    file_name = Path(file_path).name
+    possible_paths = [
+        DATA_DIR / file_path,
+        DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source A' / file_name,
+        DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source B' / file_name,
+        DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceA' / file_name,
+        DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceB' / file_name,
+        DATA_DIR / 'RawCitiesData' / 'The Hague' / file_path,
+    ]
+    if os.path.isabs(file_path):
+        possible_paths.insert(0, Path(file_path))
+    if 'RawCitiesData' in file_path or 'The Hague' in file_path:
+        possible_paths.insert(0, DATA_DIR / file_path)
+
+    found_path = None
+    for path in possible_paths:
+        if path and path.exists() and path.is_file():
+            found_path = path
+            break
+    if not found_path:
+        raise FileNotFoundError(f'File not found: {file_path}')
+
+    if prefer_prebaked:
+        prebaked_path = found_path.with_suffix('.prebaked.json')
+        if prebaked_path.exists():
+            return prebaked_path
+    return found_path
+
+
+def _iter_boundary_indices(node):
+    if isinstance(node, int):
+        yield node
+        return
+    if isinstance(node, list):
+        for child in node:
+            yield from _iter_boundary_indices(child)
+
+
+def _cityjson_world_vertices(city_json: dict) -> np.ndarray:
+    vertices = city_json.get('vertices', [])
+    if not isinstance(vertices, list):
+        raise ValueError('CityJSON vertices must be a list')
+    transform = city_json.get('transform') or {}
+    scale = transform.get('scale', [1.0, 1.0, 1.0])
+    translate = transform.get('translate', [0.0, 0.0, 0.0])
+
+    raw = np.asarray(vertices, dtype=np.float64)
+    if raw.ndim != 2 or raw.shape[1] != 3:
+        raise ValueError('CityJSON vertices must be shape (N, 3)')
+    return raw * np.asarray(scale, dtype=np.float64) + np.asarray(translate, dtype=np.float64)
+
+
+def _find_cityobject_key(city_objects: dict, normalized_id: str):
+    for obj_id in city_objects.keys():
+        if _normalize_building_id(obj_id) == normalized_id:
+            return obj_id
+    return None
+
+
+def _compute_building_centroid(city_json: dict, normalized_id: str):
+    city_objects = city_json.get('CityObjects', {})
+    obj_key = _find_cityobject_key(city_objects, normalized_id)
+    if not obj_key:
+        return None, None
+    city_obj = city_objects.get(obj_key, {})
+
+    vertex_indices = set()
+    for geometry in city_obj.get('geometry', []) or []:
+        for idx in _iter_boundary_indices(geometry.get('boundaries', [])):
+            if isinstance(idx, int):
+                vertex_indices.add(idx)
+    if not vertex_indices:
+        return obj_key, None
+
+    world_vertices = _cityjson_world_vertices(city_json)
+    valid = [idx for idx in vertex_indices if 0 <= idx < len(world_vertices)]
+    if not valid:
+        return obj_key, None
+
+    centroid = world_vertices[valid].mean(axis=0)
+    return obj_key, centroid
+
+
+def _apply_rigid_to_cityjson(city_json: dict, rotation: np.ndarray, translation: np.ndarray) -> dict:
+    out = copy.deepcopy(city_json)
+    transformed = apply_rigid_transform(_cityjson_world_vertices(city_json), rotation, translation)
+    out['vertices'] = np.round(transformed, 6).tolist()
+    out.pop('transform', None)
+    return out
+
+
+def _metric_filename_candidates(file_name: str) -> list:
+    """
+    Return possible base filenames for derived/damaged/aligned files.
+
+    Example:
+    TheHague..._pdm_eq_damaged_no_crs_aligned_to_index_crs.json
+      -> TheHague....json
+    """
+    candidates = [file_name]
+    path_obj = Path(file_name)
+    stem = path_obj.stem
+    suffix = path_obj.suffix or '.json'
+
+    cur = stem
+    while True:
+        next_cur = re.sub(r'(_aligned_to_index_crs)$', '', cur)
+        next_cur = re.sub(r'(_pdm_eq_damaged_no_crs(?:_v\d+)?)$', '', next_cur)
+        if next_cur == cur:
+            break
+        cur = next_cur
+
+    base_name = f'{cur}{suffix}'
+    if base_name not in candidates:
+        candidates.append(base_name)
+
+    return candidates
 
 
 def build_features_from_parquet(parquet_path: Path):
@@ -1484,13 +1617,19 @@ def get_classifier_summary():
         
         # Get file name to match against file_metrics keys
         file_name = Path(file_path).name
-        
-        # Find matching file in file_metrics (try exact match first, then partial)
+        metric_name_candidates = _metric_filename_candidates(file_name)
+
+        # Find matching file in file_metrics (exact/partial; includes fallback to base filename)
         file_metric_data = None
-        for key in file_metrics.keys():
-            if key == file_name or file_name in key or key in file_name:
-                file_metric_data = file_metrics[key]
-                print(f"Found metrics for file: {key}")
+        matched_metric_key = None
+        for candidate_name in metric_name_candidates:
+            for key in file_metrics.keys():
+                if key == candidate_name or candidate_name in key or key in candidate_name:
+                    file_metric_data = file_metrics[key]
+                    matched_metric_key = key
+                    print(f"Found metrics for file: {key} (requested: {file_name})")
+                    break
+            if file_metric_data is not None:
                 break
         
         if not file_metric_data:
@@ -1539,9 +1678,20 @@ def get_classifier_summary():
         
         # Count total pairs for this file
         total_pairs = 0
-        if bkafi_by_file and file_name in bkafi_by_file:
-            for building_data in bkafi_by_file[file_name].values():
-                total_pairs += len(building_data.get('possible_matches', []))
+        if bkafi_by_file:
+            pair_source_key = None
+            if file_name in bkafi_by_file:
+                pair_source_key = file_name
+            elif matched_metric_key and matched_metric_key in bkafi_by_file:
+                pair_source_key = matched_metric_key
+            else:
+                for candidate_name in metric_name_candidates:
+                    if candidate_name in bkafi_by_file:
+                        pair_source_key = candidate_name
+                        break
+            if pair_source_key:
+                for building_data in bkafi_by_file[pair_source_key].values():
+                    total_pairs += len(building_data.get('possible_matches', []))
         
         # Get total buildings in file
         candidates_in_file = file_metric_data.get('candidates_in_file', 0)
@@ -1612,6 +1762,116 @@ def get_classifier_summary():
     except Exception as e:
         import traceback
         print(f"Error getting classifier summary: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pdm/align-crs', methods=['POST'])
+def pdm_align_crs():
+    """
+    Step 4: Align a CRS-missing damaged candidate file to index CRS
+    using Arun et al. (1987) least-squares rigid registration.
+    """
+    try:
+        payload = request.get_json() or {}
+        candidate_file = payload.get('candidate_file')
+        index_file = payload.get('index_file')
+        anchor_ids = payload.get('anchor_ids') or DEFAULT_PDM_ANCHOR_IDS
+
+        if not candidate_file or not index_file:
+            return jsonify({'error': 'candidate_file and index_file are required'}), 400
+        if not isinstance(anchor_ids, list) or len(anchor_ids) < 3:
+            return jsonify({'error': 'anchor_ids must contain at least 3 building IDs'}), 400
+
+        candidate_path = _resolve_data_file(candidate_file, prefer_prebaked=False)
+        index_path = _resolve_data_file(index_file, prefer_prebaked=False)
+
+        with open(candidate_path, 'r', encoding='utf-8') as f:
+            candidate_json = json.load(f)
+        with open(index_path, 'r', encoding='utf-8') as f:
+            index_json = json.load(f)
+
+        if candidate_json.get('prebaked') or index_json.get('prebaked'):
+            return jsonify({'error': 'Step 4 must run on raw CityJSON files, not pre-baked files'}), 400
+        if 'CityObjects' not in candidate_json or 'vertices' not in candidate_json:
+            return jsonify({'error': 'candidate_file is not a valid CityJSON building file'}), 400
+        if 'CityObjects' not in index_json or 'vertices' not in index_json:
+            return jsonify({'error': 'index_file is not a valid CityJSON building file'}), 400
+
+        index_crs = (index_json.get('metadata') or {}).get('referenceSystem')
+        if not index_crs:
+            return jsonify({'error': 'Index file has no metadata.referenceSystem'}), 400
+
+        src_points = []
+        tgt_points = []
+        used_anchor_ids = []
+        missing_anchors = []
+
+        for anchor in anchor_ids:
+            normalized = _normalize_building_id(anchor)
+            _, src_centroid = _compute_building_centroid(candidate_json, normalized)
+            _, tgt_centroid = _compute_building_centroid(index_json, normalized)
+            if src_centroid is None or tgt_centroid is None:
+                missing_anchors.append(str(anchor))
+                continue
+            src_points.append(src_centroid)
+            tgt_points.append(tgt_centroid)
+            used_anchor_ids.append(normalized)
+
+        if len(src_points) < 3:
+            return jsonify({
+                'error': 'Insufficient anchor matches to estimate rigid transform',
+                'anchors_requested': anchor_ids,
+                'anchors_found': used_anchor_ids,
+                'anchors_missing': missing_anchors,
+            }), 400
+
+        fit = estimate_rigid_transform_3d(src_points, tgt_points)
+        aligned_cityjson = _apply_rigid_to_cityjson(
+            candidate_json,
+            fit['rotation'],
+            fit['translation'],
+        )
+
+        metadata = aligned_cityjson.get('metadata')
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata['referenceSystem'] = index_crs
+        metadata['pdmAlignment'] = {
+            'method': 'Arun1987LeastSquares',
+            'anchor_ids_used': used_anchor_ids,
+            'anchor_count': len(used_anchor_ids),
+            'rmse': round(float(fit['rmse']), 6),
+            'source_file': str(candidate_path.name),
+            'index_file': str(index_path.name),
+        }
+        aligned_cityjson['metadata'] = metadata
+
+        output_path = candidate_path.with_name(f'{candidate_path.stem}_aligned_to_index_crs.json')
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(aligned_cityjson, f, separators=(',', ':'))
+
+        try:
+            output_file = str(output_path.relative_to(DATA_DIR))
+        except ValueError:
+            output_file = str(output_path)
+
+        return jsonify({
+            'success': True,
+            'output_file': output_file,
+            'index_crs': index_crs,
+            'anchors_used': used_anchor_ids,
+            'anchors_missing': missing_anchors,
+            'transform': {
+                'rotation': np.round(fit['rotation'], 8).tolist(),
+                'translation': np.round(fit['translation'], 6).tolist(),
+                'rmse': round(float(fit['rmse']), 6),
+            },
+        })
+    except FileNotFoundError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        import traceback
+        print(f"Error in /api/pdm/align-crs: {e}\n{traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 

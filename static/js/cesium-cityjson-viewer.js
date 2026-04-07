@@ -60,6 +60,10 @@ class CesiumCityJSONViewer {
         this.layerSource = new Map(); // filePath -> source ('A' or 'B')
         this.currentLayerFilePath = null;
         this.currentLayerSource = null;
+        this.currentDamageScenario = null;
+        this.currentDamageHotspots = [];
+        this.brokenMeshMaxBuildings = 220;
+        this.brokenMeshUsed = 0;
         this.boundingBox = null; // Store bounding box for camera fitting
         this.crs = null; // Store coordinate reference system from metadata
         this.sourceCRS = null; // Source CRS from CityJSON metadata
@@ -583,6 +587,7 @@ class CesiumCityJSONViewer {
 
         const parseStartTime = performance.now();
         try {
+            this.brokenMeshUsed = 0;
             // Store city objects
             const cityObjects = cityJSON.CityObjects || {};
             this.cityObjects = cityObjects;
@@ -591,6 +596,10 @@ class CesiumCityJSONViewer {
             }
             const vertices = cityJSON.vertices || [];
             const transform = cityJSON.transform || null;
+            this.currentDamageScenario = cityJSON.metadata?.pdmDamageScenario || null;
+            this.currentDamageHotspots = Array.isArray(this.currentDamageScenario?.demo_hotspot_centers_xy)
+                ? this.currentDamageScenario.demo_hotspot_centers_xy
+                : [];
             
             // Pre-transform all vertices if transform is available (optimization)
             // This avoids repeated transform calculations per building
@@ -673,8 +682,9 @@ class CesiumCityJSONViewer {
                             null
                         );
                         if (entity) {
-                            entityCount++;
-                            console.log(`Comparison viewer: Successfully created entity ${entityCount} for ${objectId}`);
+                            const createdCount = Array.isArray(entity) ? entity.length : 1;
+                            entityCount += createdCount;
+                            console.log(`Comparison viewer: Successfully created ${createdCount} entity(ies) for ${objectId}`);
                         } else {
                             console.warn(`Comparison viewer: createBuildingEntity returned null for geometry ${geomIndex + 1}`);
                         }
@@ -725,7 +735,7 @@ class CesiumCityJSONViewer {
                             null // No transform needed if vertices are pre-transformed
                         );
                         if (entity) {
-                            entityCount++;
+                            entityCount += Array.isArray(entity) ? entity.length : 1;
                         }
                     });
                     processedCount++;
@@ -974,8 +984,232 @@ class CesiumCityJSONViewer {
         };
     }
     
+    _registerCreatedEntity(objectId, entity, cityObject) {
+        if (!entity) return;
+        if (!this.buildingEntities.has(objectId)) {
+            this.buildingEntities.set(objectId, []);
+            this._updateIdMapping(objectId);
+        }
+        this.buildingEntities.get(objectId).push(entity);
+
+        if (this.currentLayerFilePath) {
+            if (!this.layerEntities.has(this.currentLayerFilePath)) {
+                this.layerEntities.set(this.currentLayerFilePath, []);
+            }
+            this.layerEntities.get(this.currentLayerFilePath).push(entity);
+            if (this.currentLayerSource) {
+                this.layerSource.set(this.currentLayerFilePath, this.currentLayerSource);
+            }
+        }
+    }
+
+    _computeGeometryCentroidXY(geometry, vertices, transform) {
+        const indices = [];
+        const walk = (node) => {
+            if (typeof node === 'number') {
+                indices.push(node);
+                return;
+            }
+            if (Array.isArray(node)) {
+                node.forEach(walk);
+            }
+        };
+        walk(geometry?.boundaries || []);
+        if (indices.length === 0) return null;
+
+        let sx = 0, sy = 0, n = 0;
+        for (const idx of indices) {
+            if (idx < 0 || idx >= vertices.length) continue;
+            let [x, y] = vertices[idx];
+            if (transform) {
+                x = x * transform.scale[0] + transform.translate[0];
+                y = y * transform.scale[1] + transform.translate[1];
+            }
+            sx += x; sy += y; n += 1;
+        }
+        if (n === 0) return null;
+        return { x: sx / n, y: sy / n };
+    }
+
+    _hashString(value) {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < value.length; i++) {
+            h ^= value.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+    }
+
+    _makeRng(seed) {
+        let t = seed >>> 0;
+        return () => {
+            t += 0x6D2B79F5;
+            let x = Math.imul(t ^ (t >>> 15), 1 | t);
+            x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+            return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    _shouldUseBrokenMesh(objectId, cityObject, geometry, vertices, transform) {
+        if (!this.currentDamageScenario) return false;
+        if (!Array.isArray(this.currentDamageHotspots) || this.currentDamageHotspots.length === 0) return false;
+        // only for building geometries in main viewer
+        if (this.isComparisonViewer) return false;
+        if (cityObject?.type !== 'Building' && cityObject?.type !== 'BuildingPart') return false;
+        if (this.brokenMeshUsed >= this.brokenMeshMaxBuildings) return false;
+        const c = this._computeGeometryCentroidXY(geometry, vertices, transform);
+        if (!c) return false;
+        const radius = Number(this.currentDamageScenario.demo_hotspot_radius_m || 120);
+        let minDist = Infinity;
+        for (const hs of this.currentDamageHotspots) {
+            if (!Array.isArray(hs) || hs.length < 2) continue;
+            const dx = c.x - hs[0];
+            const dy = c.y - hs[1];
+            const d = Math.hypot(dx, dy);
+            if (d < minDist) minDist = d;
+        }
+        if (!isFinite(minDist) || minDist > radius) return false;
+
+        // Prefer near-hotspot buildings, deterministic subset for stable rendering.
+        const severity = 1.0 - Math.min(1.0, minDist / Math.max(radius, 1e-6));
+        const seed = this._hashString(`${objectId}|${this.currentLayerFilePath || ''}`);
+        const pick = (seed % 1000) / 1000;
+        const threshold = 0.40 + 0.55 * severity; // 0.40..0.95
+        return pick <= threshold;
+    }
+
+    createBrokenMeshEntities(objectId, cityObject, geometry, vertices, transform) {
+        try {
+            if (geometry.type !== 'Solid' || !geometry.boundaries || !geometry.boundaries[0]) {
+                return null;
+            }
+            const outerShell = geometry.boundaries[0];
+            if (!Array.isArray(outerShell) || outerShell.length === 0) return null;
+
+            const defaultColor = this.getMaterialForObjectType(cityObject.type, this.currentLayerSource);
+            const entities = [];
+            const maxFaces = 26; // keep responsive
+            const seed = this._hashString(`${objectId}|fracture|${this.currentLayerFilePath || ''}`);
+            const rnd = this._makeRng(seed);
+
+            // Collect transformed vertices for local centroid/scale.
+            const allFacePoints = [];
+            for (let f = 0; f < Math.min(outerShell.length, maxFaces); f++) {
+                const face = outerShell[f];
+                if (!face || !face[0] || face[0].length < 3) continue;
+                const ring = face[0];
+                for (let i = 0; i < ring.length; i++) {
+                    const idx = ring[i];
+                    if (idx < 0 || idx >= vertices.length) continue;
+                    let [x, y, z] = vertices[idx];
+                    if (transform) {
+                        x = x * transform.scale[0] + transform.translate[0];
+                        y = y * transform.scale[1] + transform.translate[1];
+                        z = z * transform.scale[2] + transform.translate[2];
+                    }
+                    allFacePoints.push([x, y, z]);
+                }
+            }
+            if (allFacePoints.length < 6) return null;
+            let cx = 0, cy = 0, cz = 0;
+            for (const p of allFacePoints) { cx += p[0]; cy += p[1]; cz += p[2]; }
+            cx /= allFacePoints.length; cy /= allFacePoints.length; cz /= allFacePoints.length;
+
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+            allFacePoints.forEach(([x, y, z]) => {
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+            });
+            const spanXY = Math.max(maxX - minX, maxY - minY, 1.0);
+            const spanZ = Math.max(maxZ - minZ, 1.0);
+            const maxLateral = Math.min(2.0, Math.max(0.35, spanXY * 0.16));
+
+            for (let f = 0; f < Math.min(outerShell.length, maxFaces); f++) {
+                const face = outerShell[f];
+                if (!face || !face[0] || face[0].length < 3) continue;
+                const ring = face[0];
+                const pts = [];
+                for (let i = 0; i < ring.length; i++) {
+                    const idx = ring[i];
+                    if (idx < 0 || idx >= vertices.length) continue;
+                    let [x, y, z] = vertices[idx];
+                    if (transform) {
+                        x = x * transform.scale[0] + transform.translate[0];
+                        y = y * transform.scale[1] + transform.translate[1];
+                        z = z * transform.scale[2] + transform.translate[2];
+                    }
+                    pts.push([x, y, z]);
+                }
+                if (pts.length < 3) continue;
+
+                // Fan triangulation + per-triangle local fracture
+                const p0 = pts[0];
+                for (let i = 1; i < pts.length - 1; i++) {
+                    // Create holes: skip some triangles entirely
+                    if (rnd() < 0.22) continue;
+                    const tri = [p0, pts[i], pts[i + 1]];
+                    const fractured = tri.map(([x, y, z]) => {
+                        const vx = x - cx, vy = y - cy, vz = z - cz;
+                        const h = Math.max(0, Math.min(1, (z - minZ) / spanZ));
+                        const collapse = 0.40 + 0.45 * rnd();
+                        let nx = cx + vx * (0.95 + 0.15 * rnd());
+                        let ny = cy + vy * (0.95 + 0.15 * rnd());
+                        let nz = cz + vz * collapse;
+
+                        const jx = (rnd() * 2 - 1) * maxLateral * (0.30 + 0.55 * h);
+                        const jy = (rnd() * 2 - 1) * maxLateral * (0.30 + 0.55 * h);
+                        const jz = -spanZ * (0.03 + 0.30 * rnd()) * (0.3 + h);
+                        nx += jx; ny += jy; nz += jz;
+                        if (nz < minZ) nz = minZ;
+                        return [nx, ny, nz];
+                    });
+
+                    const positions = fractured.map(([x, y, z]) => {
+                        const coords = this.transformToWGS84(x, y);
+                        return Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat, z);
+                    });
+                    if (positions.length < 3) continue;
+
+                    const entity = this.viewer.entities.add({
+                        name: cityObject.attributes?.name || objectId,
+                        buildingId: objectId,
+                        filePath: this.currentLayerFilePath,
+                        cityObjectData: cityObject,
+                        defaultColor,
+                        polygon: {
+                            hierarchy: positions,
+                            perPositionHeight: true,
+                            material: new Cesium.ColorMaterialProperty(defaultColor.withAlpha(0.92)),
+                            outline: true,
+                            outlineColor: Cesium.Color.BLACK.withAlpha(0.52),
+                            outlineWidth: 1
+                        }
+                    });
+                    entities.push(entity);
+                    this._registerCreatedEntity(objectId, entity, cityObject);
+                }
+            }
+
+            if (entities.length > 0) {
+                this.brokenMeshUsed += 1;
+            }
+            return entities.length > 0 ? entities : null;
+        } catch (error) {
+            console.error(`Error in createBrokenMeshEntities for ${objectId}:`, error);
+            return null;
+        }
+    }
+
     createBuildingEntity(objectId, cityObject, geometry, vertices, transform) {
         try {
+            if (this._shouldUseBrokenMesh(objectId, cityObject, geometry, vertices, transform)) {
+                const broken = this.createBrokenMeshEntities(objectId, cityObject, geometry, vertices, transform);
+                if (broken && broken.length > 0) {
+                    return broken;
+                }
+            }
+
             // Single vertex pass: compute footprint positions + height in one sweep.
             // (Previously calculateBuildingBoundingBox + convertGeometryToPositions ran separately,
             //  each iterating all vertices plus proj4 per vertex in the second pass.)
@@ -1019,23 +1253,7 @@ class CesiumCityJSONViewer {
                 }
             });
             
-            // Store entity for click handling
-            if (!this.buildingEntities.has(objectId)) {
-                this.buildingEntities.set(objectId, []);
-                // Pre-compute ID mapping for fast lookups
-                this._updateIdMapping(objectId);
-            }
-            this.buildingEntities.get(objectId).push(entity);
-
-            if (this.currentLayerFilePath) {
-                if (!this.layerEntities.has(this.currentLayerFilePath)) {
-                    this.layerEntities.set(this.currentLayerFilePath, []);
-                }
-                this.layerEntities.get(this.currentLayerFilePath).push(entity);
-                if (this.currentLayerSource) {
-                    this.layerSource.set(this.currentLayerFilePath, this.currentLayerSource);
-                }
-            }
+            this._registerCreatedEntity(objectId, entity, cityObject);
             
             return entity;
         } catch (error) {
@@ -1571,6 +1789,9 @@ class CesiumCityJSONViewer {
         this.boundingBox = null;
         this.crs = null;
         this.sourceCRS = null;
+        this.currentDamageScenario = null;
+        this.currentDamageHotspots = [];
+        this.brokenMeshUsed = 0;
         this.currentLayerFilePath = null;
         this.pendingLoads = [];
         this.initialCameraPosition = null; // Clear initial camera position when clearing buildings

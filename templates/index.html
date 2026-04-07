@@ -86,9 +86,9 @@
                 <h2 class="text-center mb-2">The Pipeline</h2>
                 <figure class="pipeline-figure">
                     <img src="{{ url_for('static', filename='images/demo_pipeline_cropped.png') }}"
-                         alt="Coordinate-agnostic geospatial ER pipeline: training and inference over candidate and index datasets, with featurization, blocking, and matching"
+                         alt="Coordinate-agnostic geospatial ER pipeline: training and inference over candidate and index datasets, with featurization, blocking, matching, and rigid registration"
                          class="pipeline-figure-img">
-                    <figcaption>Coordinate-agnostic geospatial ER pipeline overview: training (top) and inference (bottom) over candidate and index datasets, with featurization, blocking, and matching.</figcaption>
+                    <figcaption>Coordinate-agnostic geospatial ER pipeline overview: training (top) and inference (bottom) over candidate and index datasets, with featurization, blocking, matching, and rigid registration.</figcaption>
                 </figure>
                 <div class="pipeline-stages">
                     <div class="pipeline-stage">
@@ -110,6 +110,13 @@
                         <div class="pipeline-stage-text">
                             <h4>Match Classification</h4>
                             <p>A machine-learning classifier scores each candidate pair and outputs a confidence value. Pairs above the decision threshold are labelled as matches. The demo displays the results as a colour-coded map of the city, showing confirmed matches, false positives, and buildings with no match found.</p>
+                        </div>
+                    </div>
+                    <div class="pipeline-stage">
+                        <div class="pipeline-stage-number">4</div>
+                        <div class="pipeline-stage-text">
+                            <h4>Arun Registration + CRS Assignment</h4>
+                            <p>For post-disaster UAV files without CRS metadata, Step 4 estimates a rigid 3D transform using anchor buildings and aligns the damaged candidate set to the index geometry. The output is written with the index dataset CRS so it can be rendered and compared in the correct coordinate reference system.</p>
                         </div>
                     </div>
                 </div>

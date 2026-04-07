@@ -15,8 +15,10 @@ let _colorUpdateTicket = null; // Concurrency guard for color update calls
 let pipelineState = {
     step1Completed: false, // Geometric Featurization
     step2Completed: false, // BKAFI Blocking
-    step3Completed: false  // Entity Resolution
+    step3Completed: false, // Entity Resolution
+    step4Completed: false  // Arun registration + CRS assignment
 };
+const STEP4_DEFAULT_ANCHORS = ['0518100000327112', '0518100000213258', '0518100000285840'];
 
 let layerState = {};
 // Expose layerState on window so cesium-cityjson-viewer.js can read dimmed/hidden flags
@@ -1853,7 +1855,8 @@ function resetPipelineState() {
     pipelineState = {
         step1Completed: false,
         step2Completed: false,
-        step3Completed: false
+        step3Completed: false,
+        step4Completed: false
     };
     selectedBuildingId = null;
     selectedBuildingData = null;
@@ -1868,6 +1871,7 @@ function resetPipelineState() {
     const stepBtn1 = document.getElementById('step-btn-1');
     const stepBtn2 = document.getElementById('step-btn-2');
     const stepBtn3 = document.getElementById('step-btn-3');
+    const stepBtn4 = document.getElementById('step-btn-4');
     
     if (stepBtn1) {
         stepBtn1.textContent = 'Calculate Features';
@@ -1885,6 +1889,12 @@ function resetPipelineState() {
         stepBtn3.textContent = 'Run Classifier';
         stepBtn3.style.background = '#667eea';
         stepBtn3.disabled = true; // Disable until step 2 is completed
+    }
+
+    if (stepBtn4) {
+        stepBtn4.textContent = 'Run Step 4';
+        stepBtn4.style.background = '#667eea';
+        stepBtn4.disabled = true; // Disable until step 3 is completed
     }
     
     updatePipelineUI();
@@ -3675,6 +3685,10 @@ function viewResults() {
             if (summaryBtn) {
                 summaryBtn.style.display = 'block';
             }
+            const step4Btn = document.getElementById('step-btn-4');
+            if (step4Btn) {
+                step4Btn.disabled = false;
+            }
             
             // Update building colors based on match status (use cached data if available)
             updateBuildingColorsForStage3(true, () => {
@@ -3694,6 +3708,83 @@ function viewResults() {
             hideLoading();
             alert('Error loading classifier results summary: ' + error.message);
             stepBtn.textContent = 'Run Classifier';
+            stepBtn.disabled = false;
+        });
+}
+
+// Step 4: Arun (1987) rigid registration + CRS assignment
+function runStep4Alignment() {
+    if (!pipelineState.step3Completed) {
+        alert('Please complete Matching Classifier first.');
+        return;
+    }
+    if (!selectedFile) {
+        alert('Please select a candidates file first.');
+        return;
+    }
+
+    const stepBtn = document.getElementById('step-btn-4');
+    if (!stepBtn) {
+        alert('Step 4 button is missing from the page.');
+        return;
+    }
+
+    const visibleIndex = Object.entries(layerState).find(([, state]) => state.visible && state.source === 'B');
+    const indexFile = visibleIndex
+        ? visibleIndex[0]
+        : ((allAvailableFiles.B && allAvailableFiles.B[0]) ? allAvailableFiles.B[0].path : null);
+    if (!indexFile) {
+        alert('Please load at least one Index (B) file before Step 4.');
+        return;
+    }
+
+    stepBtn.textContent = 'Aligning...';
+    stepBtn.disabled = true;
+    showLoading('Running Arun (1987) rigid alignment and assigning CRS...');
+
+    fetch('/api/pdm/align-crs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            candidate_file: selectedFile,
+            index_file: indexFile,
+            anchor_ids: STEP4_DEFAULT_ANCHORS
+        })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            pipelineState.step4Completed = true;
+            updatePipelineUI();
+            updateViewerLegend();
+
+            stepBtn.textContent = 'Completed';
+            stepBtn.style.background = '#28a745';
+
+            const outFile = data.output_file;
+            if (outFile) {
+                const name = outFile.split('/').pop();
+                const alreadyInList = (allAvailableFiles.A || []).some((f) => f.path === outFile);
+                if (!alreadyInList) {
+                    allAvailableFiles.A.unshift({ filename: name, path: outFile, size: 0 });
+                }
+                updateViewerLegend();
+                toggleLayer(outFile, 'A', true);
+                zoomToLayer(outFile);
+            }
+
+            hideLoading();
+            alert(`Step 4 completed.\nAligned file: ${data.output_file}\nAssigned CRS: ${data.index_crs}`);
+        })
+        .catch(error => {
+            hideLoading();
+            console.error('Error in Step 4 alignment:', error);
+            alert('Error in Step 4 alignment: ' + error.message);
+            stepBtn.textContent = 'Run Step 4';
+            stepBtn.style.background = '#667eea';
             stepBtn.disabled = false;
         });
 }
@@ -3743,6 +3834,22 @@ function updatePipelineUI() {
         } else {
             if (step3Status) { step3Status.innerHTML = ''; step3Status.className = 'step-status'; }
             if (step3SummaryBtn) step3SummaryBtn.style.display = 'none';
+        }
+    }
+
+    // Step 4: yellow when current (step 3 done, step 4 not done), green when completed
+    const step4El = document.getElementById('step-4');
+    const step4Status = step4El ? step4El.querySelector('.step-status') : null;
+    if (step4El) {
+        step4El.classList.remove('step-current-yellow', 'step-completed');
+        if (pipelineState.step4Completed) {
+            step4El.classList.add('step-completed');
+            if (step4Status) { step4Status.innerHTML = '✓'; step4Status.className = 'step-status completed'; }
+        } else if (pipelineState.step3Completed) {
+            step4El.classList.add('step-current-yellow');
+            if (step4Status) { step4Status.innerHTML = ''; step4Status.className = 'step-status'; }
+        } else if (step4Status) {
+            step4Status.innerHTML = ''; step4Status.className = 'step-status';
         }
     }
 }
